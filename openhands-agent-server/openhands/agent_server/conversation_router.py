@@ -1,5 +1,6 @@
 """Conversation router for OpenHands SDK."""
 
+import asyncio
 from typing import Annotated
 from uuid import UUID
 
@@ -19,11 +20,20 @@ from openhands.agent_server._secrets_exposure import (
     decrypt_incoming_llm_secrets,
     get_cipher,
 )
+from openhands.agent_server.browser_tool_transport import (
+    BrowserToolCallRequest,
+    call_browser_tool,
+    list_browser_tools,
+)
 from openhands.agent_server.conversation_service import (
     ConversationService,
     InvalidParentConversation,
 )
-from openhands.agent_server.dependencies import get_conversation_service
+from openhands.agent_server.dependencies import (
+    get_conversation_service,
+    get_event_service,
+)
+from openhands.agent_server.event_service import EventService
 from openhands.agent_server.models import (
     INCLUDE_SKILLS_PARAM_TITLE,
     AgentResponseResult,
@@ -58,10 +68,29 @@ from openhands.sdk.profiles.resolver import (
 )
 from openhands.sdk.tool.client_tool import ClientToolRegistrationError
 from openhands.sdk.workspace import LocalWorkspace
+from openhands.tools.browser_use.definition import BrowserObservation
 from openhands.tools.preset.default import get_default_tools
 
 
 conversation_router = APIRouter(prefix="/conversations", tags=["Conversations"])
+
+
+@conversation_router.get("/{conversation_id}/browser/tools")
+async def get_conversation_browser_tools(
+    event_service: EventService = Depends(get_event_service),
+):
+    """Read native browser schemas from this sandbox, without an LLM call."""
+    return await asyncio.to_thread(list_browser_tools, event_service)
+
+
+@conversation_router.post("/{conversation_id}/browser/call")
+async def call_conversation_browser_tool(
+    request: BrowserToolCallRequest,
+    event_service: EventService = Depends(get_event_service),
+) -> BrowserObservation:
+    """Use the sandbox's shared browser and return its original observation."""
+    return await asyncio.to_thread(call_browser_tool, event_service, request)
+
 
 # Examples
 

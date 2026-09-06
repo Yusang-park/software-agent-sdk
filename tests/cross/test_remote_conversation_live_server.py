@@ -217,6 +217,66 @@ def authenticated_server_env(
         yield env
 
 
+def test_browser_transport_over_authenticated_http(authenticated_server_env):
+    from openhands.tools.browser_use.definition import BrowserToolSet
+    from openhands.tools.browser_use.impl import BrowserToolExecutor
+
+    if BrowserToolExecutor.check_chromium_available() is None:
+        pytest.skip("Chromium is not installed")
+    env = authenticated_server_env
+    agent = Agent(llm=LLM(model="gpt-4o-mini", api_key=SecretStr("test")), tools=[])
+    headers = {"X-Session-API-Key": env["api_key"]}
+    try:
+        with httpx.Client(base_url=env["host"], timeout=120) as client:
+            start = client.post(
+                "/api/conversations",
+                headers=headers,
+                json={
+                    "agent": agent.model_dump(
+                        mode="json", context={"expose_secrets": True}
+                    ),
+                    "workspace": {"working_dir": str(env["workspace_path"])},
+                },
+            )
+            start.raise_for_status()
+            path = f"/api/conversations/{start.json()['id']}/browser"
+            assert client.get(f"{path}/tools").status_code == 401
+            catalog = client.get(f"{path}/tools", headers=headers)
+            assert catalog.status_code == 200
+            assert "browser_get_state" in {tool["name"] for tool in catalog.json()}
+            navigate = client.post(
+                f"{path}/call",
+                headers=headers,
+                json={
+                    "tool_name": "browser_navigate",
+                    "arguments": {"url": "about:blank"},
+                },
+            )
+            navigate.raise_for_status()
+            capture = client.post(
+                f"{path}/call",
+                headers=headers,
+                json={
+                    "tool_name": "browser_get_state",
+                    "arguments": {"include_screenshot": True},
+                },
+            )
+            capture.raise_for_status()
+            assert capture.json()["screenshot_data"]
+            denied = client.post(
+                f"{path}/call",
+                json={
+                    "tool_name": "browser_get_state",
+                    "arguments": {},
+                },
+            )
+            assert denied.status_code == 401
+    finally:
+        executor = BrowserToolSet._shared_executor
+        if executor is not None:
+            executor.close()
+
+
 @pytest.fixture
 def patched_llm(monkeypatch: pytest.MonkeyPatch) -> None:
     """Patch LLM.completion to a deterministic assistant message response."""
