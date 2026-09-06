@@ -277,6 +277,40 @@ def test_browser_transport_over_authenticated_http(authenticated_server_env):
             executor.close()
 
 
+def test_server_shutdown_releases_rpc_browser(tmp_path, monkeypatch):
+    from openhands.tools.browser_use.definition import BrowserToolSet
+    from openhands.tools.browser_use.impl import BrowserToolExecutor
+
+    if BrowserToolExecutor.check_chromium_available() is None:
+        pytest.skip("Chromium is not installed")
+    try:
+        with live_server_env(tmp_path, monkeypatch) as env:
+            agent = Agent(
+                llm=LLM(model="gpt-4o-mini", api_key=SecretStr("test")), tools=[]
+            )
+            with httpx.Client(base_url=env["host"], timeout=30) as client:
+                start = client.post(
+                    "/api/conversations",
+                    json={
+                        "agent": agent.model_dump(
+                            mode="json", context={"expose_secrets": True}
+                        ),
+                        "workspace": {"working_dir": str(env["workspace_path"])},
+                    },
+                )
+                start.raise_for_status()
+                catalog = client.get(
+                    f"/api/conversations/{start.json()['id']}/browser/tools"
+                )
+                catalog.raise_for_status()
+                assert BrowserToolSet._shared_executor is not None
+        assert BrowserToolSet._shared_executor is None
+    finally:
+        executor = BrowserToolSet._shared_executor
+        if executor is not None:
+            executor.close()
+
+
 @pytest.fixture
 def patched_llm(monkeypatch: pytest.MonkeyPatch) -> None:
     """Patch LLM.completion to a deterministic assistant message response."""

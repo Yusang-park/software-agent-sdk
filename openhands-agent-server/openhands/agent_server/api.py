@@ -21,6 +21,7 @@ from openhands.agent_server.agent_profiles_router import agent_profiles_router
 from openhands.agent_server.auth_router import auth_router
 from openhands.agent_server.bash_router import bash_router
 from openhands.agent_server.bash_service import get_default_bash_event_service
+from openhands.agent_server.browser_tool_transport import close_browser_transport
 from openhands.agent_server.config import (
     Config,
     get_default_config,
@@ -276,6 +277,9 @@ async def api_lifespan(api: FastAPI) -> AsyncIterator[None]:
                 if tool_preload_service is not None:
                     await tool_preload_service.stop()
 
+            async def stop_browser_transport():
+                await asyncio.to_thread(close_browser_transport)
+
             async def stop_served_app_service():
                 await served_app_service.stop()
 
@@ -283,6 +287,7 @@ async def api_lifespan(api: FastAPI) -> AsyncIterator[None]:
                 stop_vscode_service(),
                 stop_desktop_service(),
                 stop_tool_preload_service(),
+                stop_browser_transport(),
                 stop_served_app_service(),
                 return_exceptions=True,
             )

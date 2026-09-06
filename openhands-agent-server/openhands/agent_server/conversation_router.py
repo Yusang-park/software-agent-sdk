@@ -21,6 +21,7 @@ from openhands.agent_server._secrets_exposure import (
     get_cipher,
 )
 from openhands.agent_server.browser_tool_transport import (
+    BrowserJSONValue,
     BrowserToolCallRequest,
     call_browser_tool,
     list_browser_tools,
@@ -78,7 +79,7 @@ conversation_router = APIRouter(prefix="/conversations", tags=["Conversations"])
 @conversation_router.get("/{conversation_id}/browser/tools")
 async def get_conversation_browser_tools(
     event_service: EventService = Depends(get_event_service),
-):
+) -> list[dict[str, BrowserJSONValue]]:
     """Read native browser schemas from this sandbox, without an LLM call."""
     return await asyncio.to_thread(list_browser_tools, event_service)
 

@@ -1,10 +1,10 @@
 """Invoke native tools on the sandbox browser without starting an agent run."""
 
 import threading
-from typing import Any
 from urllib.parse import urlsplit
 
 from fastapi import HTTPException
+from fastapi.encoders import jsonable_encoder
 from pydantic import BaseModel, Field, HttpUrl, ValidationError
 
 from openhands.agent_server.event_service import EventService
@@ -19,10 +19,20 @@ from openhands.tools.browser_use.definition import (
 
 _browser_call_lock = threading.Lock()
 
+type BrowserJSONValue = (
+    str
+    | int
+    | float
+    | bool
+    | None
+    | list[BrowserJSONValue]
+    | dict[str, BrowserJSONValue]
+)
+
 
 class BrowserToolCallRequest(BaseModel):
     tool_name: str = Field(min_length=1)
-    arguments: dict[str, Any] = Field(default_factory=dict)
+    arguments: dict[str, BrowserJSONValue] = Field(default_factory=dict)
     preview_url: HttpUrl | None = Field(
         default=None, description="Workspace Preview origin for credential references."
     )
@@ -64,9 +74,20 @@ def _require_credential_origin(
         )
 
 
-def list_browser_tools(event_service: EventService) -> list[dict[str, Any]]:
+def list_browser_tools(
+    event_service: EventService,
+) -> list[dict[str, BrowserJSONValue]]:
     conversation = event_service.get_conversation()
-    return [tool.to_mcp_tool() for tool in BrowserToolSet.create(conversation.state)]
+    return [
+        jsonable_encoder(tool.to_mcp_tool())
+        for tool in BrowserToolSet.create(conversation.state)
+    ]
+
+
+def close_browser_transport() -> None:
+    executor = BrowserToolSet._shared_executor
+    if executor is not None:
+        executor.close()
 
 
 def call_browser_tool(
