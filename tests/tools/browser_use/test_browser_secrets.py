@@ -376,7 +376,7 @@ async def test_browser_server_marks_secret_input_as_sensitive():
     locator = MagicMock()
     locator.fill = AsyncMock()
     page.locator.return_value = locator
-    server = object.__new__(CustomBrowserUseServer)
+    server = CustomBrowserUseServer()
     server._page = page
 
     result = await server._type_secret_text(2, SECRET_VALUE)
@@ -399,7 +399,7 @@ class TestBrowserStateSaysWhereOnThePageItWasRead:
     def _server_at(scroll_y: int, page_height: int, base):
         from openhands.tools.browser_use.server import CustomBrowserUseServer
 
-        server = CustomBrowserUseServer.__new__(CustomBrowserUseServer)
+        server = CustomBrowserUseServer()
         page = MagicMock()
         page.is_closed.return_value = False
         if isinstance(base, dict):
@@ -488,7 +488,7 @@ class TestScrollingToSomethingRatherThanTowardsIt:
                 seen["script"], seen["arg"] = script, arg
                 return evaluate_result
 
-        server = CustomBrowserUseServer.__new__(CustomBrowserUseServer)
+        server = CustomBrowserUseServer()
         server._page = cast(Any, Page())
         return CustomBrowserUseServer, server, seen
 

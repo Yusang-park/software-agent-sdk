@@ -11,7 +11,7 @@ import shutil
 import sys
 import tempfile
 import threading
-from collections.abc import Awaitable, Callable, Coroutine
+from collections.abc import Awaitable, Callable, Coroutine, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final, TypeVar
 
@@ -656,9 +656,11 @@ class BrowserToolExecutor(ToolExecutor[BrowserAction, BrowserObservation]):
         observation: BrowserObservation,
         mask_text: Callable[[str], str] | None,
     ) -> BrowserObservation:
-        if mask_text is None or not observation.text:
+        if not observation.text:
             return observation
-        masked_text = mask_text(observation.text)
+        masked_text = self._server.mask_sensitive_text(observation.text)
+        if mask_text is not None:
+            masked_text = mask_text(masked_text)
         if masked_text == observation.text:
             return observation
         data = observation.model_dump(exclude={"content", "full_output_save_dir"})
@@ -1125,6 +1127,18 @@ class BrowserToolExecutor(ToolExecutor[BrowserAction, BrowserObservation]):
     # screencast WebSocket service) can drive them the same way
     # `DesktopService.navigate()` drives `BrowserNavigateAction` — via
     # `asyncio.to_thread(executor.start_screencast, on_frame)`.
+    def set_sensitive_values(self, values: Sequence[str]) -> None:
+        """Register cumulative values to redact from native text and screenshots.
+
+        Values remain in memory for the lifetime of this executor. Register
+        them before entering credentials; this does not start the browser.
+        """
+
+        async def register() -> None:
+            self._server.set_sensitive_values(values)
+
+        self._async_executor.run_async(register)
+
     def browser_metadata(self) -> dict[str, str]:
         """Read the active page identity on the browser thread."""
 

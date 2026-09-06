@@ -617,3 +617,21 @@ def test_executor_exposes_browser_metadata_and_navigation_policy():
         }
     finally:
         executor.close()
+
+
+def test_sensitive_values_are_cumulative_and_redact_native_observations():
+    with patch.object(
+        BrowserToolExecutor, "_ensure_chromium_available", return_value="/chrome"
+    ):
+        executor = BrowserToolExecutor()
+    try:
+        executor.set_sensitive_values(["account@example.test"])
+        executor.set_sensitive_values(["private-password"])
+        observation = BrowserObservation.from_text(
+            text="account@example.test private-password"
+        )
+        masked = executor._mask_observation(observation, None)
+        assert masked.text == "<secret> <secret>"
+        assert not executor._initialized
+    finally:
+        executor.close()

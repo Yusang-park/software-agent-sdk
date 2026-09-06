@@ -371,3 +371,41 @@ async def test_navigation_policy_rejects_urls_without_network_requests(
     with pytest.raises(ValueError, match="HTTPS required"):
         await server.navigate("data:text/html,hello")
     page.goto.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_registered_values_mask_later_captures_and_metadata(playwright_runtime):
+    _, _, _, _, page = playwright_runtime
+    secret = "account@example.test"
+    page.evaluate.return_value = {"title": secret, "interactive_elements": []}
+    page.title = AsyncMock(return_value=f"Profile {secret}")
+    elements = page.locator.return_value
+    elements.inner_text = AsyncMock(return_value=f"Signed in as {secret}")
+    elements.evaluate_all = AsyncMock(return_value=[["Profile"], [secret], [secret]])
+    server = PlaywrightBrowserServer()
+    server._page = page
+    server.set_sensitive_values([secret])
+    server.set_sensitive_values(["second-secret"])
+
+    state = json.loads(await server.get_browser_state(include_screenshot=True))
+    assert secret not in json.dumps(state)
+    page.screenshot.assert_awaited_once_with(
+        type="jpeg",
+        quality=75,
+        mask=[elements.nth(1), elements.nth(2)],
+        mask_color="#000000",
+    )
+    metadata = await server.browser_metadata()
+    assert secret not in json.dumps(metadata)
+    assert "Signed in as <secret>" == metadata["text"]
+
+
+@pytest.mark.asyncio
+async def test_typing_secret_registers_it_for_later_captures(playwright_runtime):
+    _, _, _, _, page = playwright_runtime
+    page.locator.return_value.fill = AsyncMock()
+    page.evaluate.return_value = {"title": "registered-secret"}
+    server = PlaywrightBrowserServer()
+    server._page = page
+    await server.type_text(0, "registered-secret", secret=True)
+    assert "registered-secret" not in await server.get_browser_state()

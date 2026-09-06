@@ -3,7 +3,7 @@ from __future__ import annotations
 import base64
 import fnmatch
 import json
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from typing import Any, cast
 from urllib.parse import urlparse
 from uuid import uuid4
@@ -13,6 +13,7 @@ from playwright.async_api import (
     BrowserContext,
     CDPSession,
     Error as PlaywrightError,
+    Locator,
     Page,
     Playwright,
     Request,
@@ -133,6 +134,7 @@ class PlaywrightBrowserServer:
         self._pages: dict[str, Page] = {}
         self._allowed_domains: tuple[str, ...] = ()
         self._navigation_policy: Callable[[str], Awaitable[None]] | None = None
+        self._sensitive_values: tuple[str, ...] = ()
         self._inject_scripts: list[str] = []
         self._cdp_session: CDPSession | None = None
         self._cdp_page: Page | None = None
@@ -190,13 +192,59 @@ class PlaywrightBrowserServer:
         self._page = await self._context.new_page()
         self._register_page(self._page)
 
+    def set_sensitive_values(self, values: Sequence[str]) -> None:
+        """Register cumulative in-memory redactions for this browser session."""
+        self._sensitive_values = tuple(
+            sorted(
+                set(self._sensitive_values).union(value for value in values if value),
+                key=len,
+                reverse=True,
+            )
+        )
+
+    def mask_sensitive_text(self, text: str) -> str:
+        for value in self._sensitive_values:
+            text = text.replace(value, "<secret>")
+        return text
+
+    def _mask_sensitive_state(self, value: Any) -> Any:
+        if isinstance(value, str):
+            return self.mask_sensitive_text(value)
+        if isinstance(value, dict):
+            return {
+                key: self._mask_sensitive_state(item) for key, item in value.items()
+            }
+        if isinstance(value, list):
+            return [self._mask_sensitive_state(item) for item in value]
+        return value
+
+    async def _screenshot_masks(self, page: Page) -> list[Locator]:
+        elements = page.locator("body, body *")
+        contents = await elements.evaluate_all(
+            """(elements) => elements.map(element => [
+                typeof element.value === 'string' ? element.value : '',
+                ...Array.from(element.childNodes)
+                  .filter(node => node.nodeType === Node.TEXT_NODE)
+                  .map(node => node.textContent || '')
+            ])"""
+        )
+        return [
+            elements.nth(index)
+            for index, parts in enumerate(contents)
+            if any(
+                secret in part for secret in self._sensitive_values for part in parts
+            )
+        ]
+
     async def browser_metadata(self) -> dict[str, str]:
         """Read the active page identity and at most 12,000 rendered characters."""
         page = self._require_page()
         return {
-            "url": page.url,
-            "title": await page.title(),
-            "text": (await page.locator("body").inner_text(timeout=5000))[:12000],
+            "url": self.mask_sensitive_text(page.url),
+            "title": self.mask_sensitive_text(await page.title()),
+            "text": self.mask_sensitive_text(
+                await page.locator("body").inner_text(timeout=5000)
+            )[:12000],
         }
 
     async def navigate(self, url: str, new_tab: bool = False) -> str:
@@ -216,8 +264,17 @@ class PlaywrightBrowserServer:
         state = await page.evaluate(_STATE_SCRIPT)
         if not isinstance(state, dict):
             raise RuntimeError("Browser state response was invalid")
+        state = self._mask_sensitive_state(state)
         if include_screenshot:
-            screenshot = await page.screenshot(type="jpeg", quality=75)
+            if self._sensitive_values:
+                screenshot = await page.screenshot(
+                    type="jpeg",
+                    quality=75,
+                    mask=await self._screenshot_masks(page),
+                    mask_color="#000000",
+                )
+            else:
+                screenshot = await page.screenshot(type="jpeg", quality=75)
             state["screenshot"] = base64.b64encode(screenshot).decode()
         return json.dumps(state, indent=2)
 
@@ -263,6 +320,8 @@ class PlaywrightBrowserServer:
 
     async def type_text(self, index: int, text: str, *, secret: bool = False) -> str:
         locator = self._indexed_locator(index)
+        if secret:
+            self.set_sensitive_values([text])
         await locator.fill(text)
         value = "<secret>" if secret else repr(text)
         return f"Typed {value} into element {index}"
