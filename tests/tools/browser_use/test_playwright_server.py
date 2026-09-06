@@ -309,3 +309,65 @@ async def test_content_is_bounded_and_names_the_continuation(playwright_runtime)
     assert len(content) < 31_000
     assert "start_from_char=30100" in content
     assert "https://preview.example.com/report" in content
+
+
+@pytest.mark.asyncio
+async def test_navigation_policy_applies_to_context_requests(playwright_runtime):
+    starter, _, _, context, _ = playwright_runtime
+    policy = AsyncMock(side_effect=ValueError("Blocked by policy"))
+    server = PlaywrightBrowserServer()
+    with patch(
+        "openhands.tools.browser_use.playwright_server.async_playwright",
+        return_value=starter,
+    ):
+        await server.start(
+            headless=True,
+            executable_path="/usr/bin/chromium",
+            navigation_policy=policy,
+        )
+    context.route.assert_awaited_once_with("**/*", server._guard_route)
+    request = MagicMock()
+    request.url = "http://preview.example.com:8000/private"
+    request.is_navigation_request.return_value = True
+    request.frame.parent_frame = None
+    route = MagicMock(abort=AsyncMock(), continue_=AsyncMock())
+    await server._guard_route(route, request)
+    policy.assert_awaited_once_with(request.url)
+    route.abort.assert_awaited_once_with("blockedbyclient")
+    route.continue_.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_browser_metadata_reads_current_page(playwright_runtime):
+    _, _, _, _, page = playwright_runtime
+    page.url = "https://preview.example.com/result"
+    page.title = AsyncMock(return_value="Result")
+    page.locator.return_value.inner_text = AsyncMock(return_value="Rendered page")
+    server = PlaywrightBrowserServer()
+    server._page = page
+    assert await server.browser_metadata() == {
+        "url": page.url,
+        "title": "Result",
+        "text": "Rendered page",
+    }
+
+
+@pytest.mark.asyncio
+async def test_navigation_policy_rejects_urls_without_network_requests(
+    playwright_runtime,
+):
+    starter, _, _, _, page = playwright_runtime
+    server = PlaywrightBrowserServer()
+    policy = AsyncMock(side_effect=ValueError("HTTPS required"))
+    with patch(
+        "openhands.tools.browser_use.playwright_server.async_playwright",
+        return_value=starter,
+    ):
+        await server.start(
+            headless=True,
+            executable_path="/usr/bin/chromium",
+            navigation_policy=policy,
+        )
+    with pytest.raises(ValueError, match="HTTPS required"):
+        await server.navigate("data:text/html,hello")
+    page.goto.assert_not_awaited()

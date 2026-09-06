@@ -597,3 +597,23 @@ async def test_a_click_still_succeeds_when_the_page_cannot_be_read(
     )
 
     assert_browser_observation_success(result, "Click successful")
+
+
+def test_executor_exposes_browser_metadata_and_navigation_policy():
+    policy = AsyncMock()
+    with patch.object(
+        BrowserToolExecutor, "_ensure_chromium_available", return_value="/chrome"
+    ):
+        executor = BrowserToolExecutor(navigation_policy=policy)
+    try:
+        assert executor._config["navigation_policy"] is policy
+        executor._ensure_initialized = AsyncMock()
+        executor._server.browser_metadata = AsyncMock(
+            return_value={"url": "https://example.com", "title": "Example"}
+        )
+        assert executor.browser_metadata() == {
+            "url": "https://example.com",
+            "title": "Example",
+        }
+    finally:
+        executor.close()

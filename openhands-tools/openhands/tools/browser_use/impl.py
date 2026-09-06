@@ -11,7 +11,7 @@ import shutil
 import sys
 import tempfile
 import threading
-from collections.abc import Callable, Coroutine
+from collections.abc import Awaitable, Callable, Coroutine
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final, TypeVar
 
@@ -310,6 +310,7 @@ class BrowserToolExecutor(ToolExecutor[BrowserAction, BrowserObservation]):
         action_timeout_seconds: float = DEFAULT_BROWSER_ACTION_TIMEOUT_SECONDS,
         full_output_save_dir: str | None = None,
         inject_scripts: list[str] | None = None,
+        navigation_policy: Callable[[str], Awaitable[None]] | None = None,
         **config,
     ):
         """Initialize BrowserToolExecutor with timeout protection.
@@ -326,6 +327,10 @@ class BrowserToolExecutor(ToolExecutor[BrowserAction, BrowserObservation]):
                 new document. Scripts are injected via CDP's
                 Page.addScriptToEvaluateOnNewDocument and run before page scripts.
                 Useful for injecting recording tools like rrweb.
+            navigation_policy: Async policy for top-level navigation URLs.
+                Raise an exception to deny a request. Runs on the browser thread.
+                Applies to explicit navigation and context-routed requests;
+                Playwright does not route subsequent HTTP redirect hops.
             **config: Additional configuration options
         """
 
@@ -394,6 +399,9 @@ class BrowserToolExecutor(ToolExecutor[BrowserAction, BrowserObservation]):
                         "for this environment. This reduces security isolation."
                     )
                 chromium_sandbox = False
+
+            if navigation_policy is not None:
+                config["navigation_policy"] = navigation_policy
 
             self._config = {
                 "headless": headless,
@@ -1117,6 +1125,15 @@ class BrowserToolExecutor(ToolExecutor[BrowserAction, BrowserObservation]):
     # screencast WebSocket service) can drive them the same way
     # `DesktopService.navigate()` drives `BrowserNavigateAction` — via
     # `asyncio.to_thread(executor.start_screencast, on_frame)`.
+    def browser_metadata(self) -> dict[str, str]:
+        """Read the active page identity on the browser thread."""
+
+        async def read() -> dict[str, str]:
+            await self._ensure_initialized()
+            return await self._server.browser_metadata()
+
+        return self._async_executor.run_async(read)
+
     def start_screencast(
         self, on_frame: Callable[[str, dict[str, Any]], None], **kwargs: Any
     ) -> bool:

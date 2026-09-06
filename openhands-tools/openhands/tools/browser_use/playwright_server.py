@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import fnmatch
 import json
+from collections.abc import Awaitable, Callable
 from typing import Any, cast
 from urllib.parse import urlparse
 from uuid import uuid4
@@ -131,6 +132,7 @@ class PlaywrightBrowserServer:
         self._page: Page | None = None
         self._pages: dict[str, Page] = {}
         self._allowed_domains: tuple[str, ...] = ()
+        self._navigation_policy: Callable[[str], Awaitable[None]] | None = None
         self._inject_scripts: list[str] = []
         self._cdp_session: CDPSession | None = None
         self._cdp_page: Page | None = None
@@ -158,12 +160,14 @@ class PlaywrightBrowserServer:
         chromium_sandbox: bool = False,
         window_size: ViewportSize | None = None,
         allowed_domains: list[str] | None = None,
+        navigation_policy: Callable[[str], Awaitable[None]] | None = None,
         **_: Any,
     ) -> None:
         if self.is_live:
             return
         self._playwright = await async_playwright().start()
         self._allowed_domains = tuple(allowed_domains or ())
+        self._navigation_policy = navigation_policy
         launch_args = ["--disable-dev-shm-usage"]
         if window_size is not None:
             launch_args.append(
@@ -180,14 +184,23 @@ class PlaywrightBrowserServer:
         )
         for script in self._inject_scripts:
             await self._context.add_init_script(script=script)
-        if self._allowed_domains:
+        if self._allowed_domains or self._navigation_policy is not None:
             await self._context.route("**/*", self._guard_route)
         self._context.on("page", self._register_page)
         self._page = await self._context.new_page()
         self._register_page(self._page)
 
+    async def browser_metadata(self) -> dict[str, str]:
+        """Read the active page identity and at most 12,000 rendered characters."""
+        page = self._require_page()
+        return {
+            "url": page.url,
+            "title": await page.title(),
+            "text": (await page.locator("body").inner_text(timeout=5000))[:12000],
+        }
+
     async def navigate(self, url: str, new_tab: bool = False) -> str:
-        self._validate_url(url)
+        await self._validate_navigation(url)
         page = await self._new_page() if new_tab else self._require_page()
         await page.goto(url, wait_until="domcontentloaded")
         await self._wait_for_meaningful_page(page)
@@ -595,11 +608,16 @@ class PlaywrightBrowserServer:
             return
         raise ValueError(f"Navigation to {hostname!r} is not allowed")
 
+    async def _validate_navigation(self, url: str) -> None:
+        self._validate_url(url)
+        if self._navigation_policy is not None:
+            await self._navigation_policy(url)
+
     async def _guard_route(self, route: Route, request: Request) -> None:
         if request.is_navigation_request() and request.frame.parent_frame is None:
             try:
-                self._validate_url(request.url)
-            except ValueError:
+                await self._validate_navigation(request.url)
+            except Exception:
                 await route.abort("blockedbyclient")
                 return
         await route.continue_()
