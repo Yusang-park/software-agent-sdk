@@ -13,6 +13,7 @@ from openhands.tools.browser_use.impl import BrowserToolExecutor
 def mock_browser_server():
     """Create a mock CustomBrowserUseServer."""
     server = MagicMock()
+    server.mask_sensitive_text.side_effect = lambda text: text
 
     async def start(**_config):
         server.is_live = True

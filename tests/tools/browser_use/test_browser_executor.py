@@ -597,3 +597,41 @@ async def test_a_click_still_succeeds_when_the_page_cannot_be_read(
     )
 
     assert_browser_observation_success(result, "Click successful")
+
+
+def test_executor_exposes_browser_metadata_and_navigation_policy():
+    policy = AsyncMock()
+    with patch.object(
+        BrowserToolExecutor, "_ensure_chromium_available", return_value="/chrome"
+    ):
+        executor = BrowserToolExecutor(navigation_policy=policy)
+    try:
+        assert executor._config["navigation_policy"] is policy
+        executor._ensure_initialized = AsyncMock()
+        executor._server.browser_metadata = AsyncMock(
+            return_value={"url": "https://example.com", "title": "Example"}
+        )
+        assert executor.browser_metadata() == {
+            "url": "https://example.com",
+            "title": "Example",
+        }
+    finally:
+        executor.close()
+
+
+def test_sensitive_values_are_cumulative_and_redact_native_observations():
+    with patch.object(
+        BrowserToolExecutor, "_ensure_chromium_available", return_value="/chrome"
+    ):
+        executor = BrowserToolExecutor()
+    try:
+        executor.set_sensitive_values(["account@example.test"])
+        executor.set_sensitive_values(["private-password"])
+        observation = BrowserObservation.from_text(
+            text="account@example.test private-password"
+        )
+        masked = executor._mask_observation(observation, None)
+        assert masked.text == "<secret> <secret>"
+        assert not executor._initialized
+    finally:
+        executor.close()

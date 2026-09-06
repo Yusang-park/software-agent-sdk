@@ -309,3 +309,103 @@ async def test_content_is_bounded_and_names_the_continuation(playwright_runtime)
     assert len(content) < 31_000
     assert "start_from_char=30100" in content
     assert "https://preview.example.com/report" in content
+
+
+@pytest.mark.asyncio
+async def test_navigation_policy_applies_to_context_requests(playwright_runtime):
+    starter, _, _, context, _ = playwright_runtime
+    policy = AsyncMock(side_effect=ValueError("Blocked by policy"))
+    server = PlaywrightBrowserServer()
+    with patch(
+        "openhands.tools.browser_use.playwright_server.async_playwright",
+        return_value=starter,
+    ):
+        await server.start(
+            headless=True,
+            executable_path="/usr/bin/chromium",
+            navigation_policy=policy,
+        )
+    context.route.assert_awaited_once_with("**/*", server._guard_route)
+    request = MagicMock()
+    request.url = "http://preview.example.com:8000/private"
+    request.is_navigation_request.return_value = True
+    request.frame.parent_frame = None
+    route = MagicMock(abort=AsyncMock(), continue_=AsyncMock())
+    await server._guard_route(route, request)
+    policy.assert_awaited_once_with(request.url)
+    route.abort.assert_awaited_once_with("blockedbyclient")
+    route.continue_.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_browser_metadata_reads_current_page(playwright_runtime):
+    _, _, _, _, page = playwright_runtime
+    page.url = "https://preview.example.com/result"
+    page.title = AsyncMock(return_value="Result")
+    page.locator.return_value.inner_text = AsyncMock(return_value="Rendered page")
+    server = PlaywrightBrowserServer()
+    server._page = page
+    assert await server.browser_metadata() == {
+        "url": page.url,
+        "title": "Result",
+        "text": "Rendered page",
+    }
+
+
+@pytest.mark.asyncio
+async def test_navigation_policy_rejects_urls_without_network_requests(
+    playwright_runtime,
+):
+    starter, _, _, _, page = playwright_runtime
+    server = PlaywrightBrowserServer()
+    policy = AsyncMock(side_effect=ValueError("HTTPS required"))
+    with patch(
+        "openhands.tools.browser_use.playwright_server.async_playwright",
+        return_value=starter,
+    ):
+        await server.start(
+            headless=True,
+            executable_path="/usr/bin/chromium",
+            navigation_policy=policy,
+        )
+    with pytest.raises(ValueError, match="HTTPS required"):
+        await server.navigate("data:text/html,hello")
+    page.goto.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_registered_values_mask_later_captures_and_metadata(playwright_runtime):
+    _, _, _, _, page = playwright_runtime
+    secret = "account@example.test"
+    page.evaluate.return_value = {"title": secret, "interactive_elements": []}
+    page.title = AsyncMock(return_value=f"Profile {secret}")
+    elements = page.locator.return_value
+    elements.inner_text = AsyncMock(return_value=f"Signed in as {secret}")
+    elements.evaluate_all = AsyncMock(return_value=[["Profile"], [secret], [secret]])
+    server = PlaywrightBrowserServer()
+    server._page = page
+    server.set_sensitive_values([secret])
+    server.set_sensitive_values(["second-secret"])
+
+    state = json.loads(await server.get_browser_state(include_screenshot=True))
+    assert secret not in json.dumps(state)
+    page.screenshot.assert_awaited_once_with(
+        type="jpeg",
+        quality=75,
+        mask=[elements.nth(1), elements.nth(2)],
+        mask_color="#000000",
+    )
+    metadata = await server.browser_metadata()
+    assert secret not in json.dumps(metadata)
+    assert "Signed in as <secret>" == metadata["text"]
+
+
+@pytest.mark.asyncio
+async def test_typing_secret_registers_it_for_later_captures(playwright_runtime):
+    _, _, _, _, page = playwright_runtime
+    page.locator.return_value.fill = AsyncMock()
+    page.evaluate.return_value = {"title": "registered-secret"}
+    server = PlaywrightBrowserServer()
+    server._page = page
+    await server.type_text(0, "registered-secret", secret=True)
+    assert "registered-secret" not in await server.get_browser_state()

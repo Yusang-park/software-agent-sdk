@@ -207,11 +207,11 @@ class TestBrowserInitialization:
                 exc_info.value
             ) or "Chromium not found" in str(exc_info.value)
 
-    def test_call_method_delegates_to_async_executor(self):
+    def test_call_method_delegates_to_async_executor(self, mock_browser_server):
         """Test that __call__ method properly delegates to async executor."""
         from openhands.tools.browser_use.definition import BrowserObservation
 
-        mock_server = MagicMock()
+        mock_server = mock_browser_server
         mock_async_executor = MagicMock()
         mock_action = MagicMock()
         expected_result = BrowserObservation.from_text(text="OK")
@@ -241,11 +241,11 @@ class TestBrowserInitialization:
                 executor._execute_action, mock_action, timeout=300.0
             )
 
-    def test_call_method_timeout_configuration(self):
+    def test_call_method_timeout_configuration(self, mock_browser_server):
         """Test that __call__ method uses correct timeout."""
         from openhands.tools.browser_use.definition import BrowserObservation
 
-        mock_server = MagicMock()
+        mock_server = mock_browser_server
         mock_async_executor = MagicMock()
         mock_async_executor.run_async.return_value = BrowserObservation.from_text(
             text="OK"
