@@ -1,8 +1,10 @@
+import asyncio
 import json
 import threading
 from collections.abc import Generator
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, call, patch
 from uuid import uuid4
 
@@ -236,7 +238,10 @@ def test_activation_route_rejects_unavailable_binding(
     callback.responses.extend([(503, "{}")] * 3)
 
     sleep = AsyncMock()
-    with patch("openhands.agent_server.credential_binding.asyncio.sleep", sleep):
+    with patch(
+        "openhands.agent_server.credential_binding.asyncio",
+        SimpleNamespace(sleep=sleep, to_thread=asyncio.to_thread),
+    ):
         response = TestClient(app).put(
             f"/api/conversations/{conversation_id}/credential-bindings/CODEX_AUTH_JSON",
             json={
@@ -269,7 +274,10 @@ def test_activation_route_retries_transient_binding_failure(
     )
     sleep = AsyncMock()
 
-    with patch("openhands.agent_server.credential_binding.asyncio.sleep", sleep):
+    with patch(
+        "openhands.agent_server.credential_binding.asyncio",
+        SimpleNamespace(sleep=sleep, to_thread=asyncio.to_thread),
+    ):
         response = TestClient(app).put(
             f"/api/conversations/{conversation_id}/credential-bindings/CODEX_AUTH_JSON",
             json={

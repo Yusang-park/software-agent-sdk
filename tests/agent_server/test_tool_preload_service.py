@@ -28,6 +28,7 @@ async def test_start_schedules_a_background_browser_warm_up():
         await service._warm_up_task
 
     executor.warm_up.assert_awaited_once()
+    executor.close.assert_called_once()
 
 
 @pytest.mark.asyncio

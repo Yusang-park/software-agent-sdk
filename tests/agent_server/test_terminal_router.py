@@ -1,5 +1,6 @@
 """Tests for bash_router.py endpoints."""
 
+import asyncio
 import tempfile
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
@@ -11,7 +12,7 @@ from openhands.agent_server.api import create_app
 from openhands.agent_server.bash_service import BashEventService
 from openhands.agent_server.config import Config
 from openhands.agent_server.dependencies import get_bash_event_service
-from openhands.agent_server.models import BashCommand
+from openhands.agent_server.models import ExecuteBashRequest
 
 
 @pytest.fixture
@@ -70,17 +71,15 @@ async def test_clear_all_bash_events_integration(test_bash_service):
     """Integration test for clearing bash events."""
     # Execute some commands to create events
     commands = [
-        BashCommand(command='echo "first"', cwd="/tmp"),
-        BashCommand(command='echo "second"', cwd="/tmp"),
+        ExecuteBashRequest(command='echo "first"', cwd="/tmp"),
+        ExecuteBashRequest(command='echo "second"', cwd="/tmp"),
     ]
 
+    tasks = []
     for cmd in commands:
-        await test_bash_service.start_bash_command(cmd)
-
-    # Wait for commands to complete
-    import asyncio
-
-    await asyncio.sleep(2)
+        _, task = await test_bash_service.start_bash_command(cmd)
+        tasks.append(task)
+    await asyncio.gather(*tasks)
 
     # Verify events exist before clearing
     page = await test_bash_service.search_bash_events()

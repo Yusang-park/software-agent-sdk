@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import yaml
+
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SERVER_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "server.yml"
@@ -10,6 +12,18 @@ AGENT_SERVER_SPEC = (
     / "agent_server"
     / "agent-server.spec"
 )
+
+
+def test_image_publication_accepts_only_trusted_pr_repository_identity() -> None:
+    jobs = yaml.safe_load(SERVER_WORKFLOW.read_text(encoding="utf-8"))["jobs"]
+    expected = (
+        "github.event_name == 'push' || "
+        "github.event_name == 'workflow_dispatch' || "
+        "(github.event_name == 'pull_request' && "
+        "github.event.pull_request.head.repo.full_name == github.repository)"
+    )
+    for name in ("build-and-push-image", "merge-manifests"):
+        assert " ".join(jobs[name]["if"].split()) == expected
 
 
 def test_server_workflow_passes_git_metadata_build_args() -> None:

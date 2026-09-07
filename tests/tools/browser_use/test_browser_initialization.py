@@ -298,16 +298,26 @@ class TestBrowserWarmUp:
 
     @pytest.mark.asyncio
     async def test_warm_up_initializes_then_tears_down(self):
+        import asyncio
         from unittest.mock import AsyncMock
 
         executor = self._executor()
-        executor._ensure_initialized = AsyncMock()
-        executor.cleanup = AsyncMock()
+        caller_loop = asyncio.get_running_loop()
+        loops = []
 
-        await executor.warm_up()
+        async def remember_loop():
+            loops.append(asyncio.get_running_loop())
 
-        executor._ensure_initialized.assert_awaited_once()
-        executor.cleanup.assert_awaited_once()
+        executor._ensure_initialized = AsyncMock(side_effect=remember_loop)
+        executor.cleanup = AsyncMock(side_effect=remember_loop)
+        try:
+            await executor.warm_up()
+            executor._ensure_initialized.assert_awaited_once()
+            executor.cleanup.assert_awaited_once()
+            assert loops[0] is loops[1]
+            assert loops[0] is not caller_loop
+        finally:
+            await asyncio.to_thread(executor.close)
 
     @pytest.mark.asyncio
     async def test_warm_up_swallows_errors_and_still_tears_down(self):
