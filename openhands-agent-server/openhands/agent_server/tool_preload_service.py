@@ -3,6 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+from typing import TYPE_CHECKING
+
+
+if TYPE_CHECKING:
+    from openhands.tools.browser_use.impl import BrowserToolExecutor
 
 from openhands.agent_server.config import get_default_config
 from openhands.sdk.logger import get_logger
@@ -40,7 +45,7 @@ class ToolPreloadService:
             # launch is fast. It runs off the startup path (fire-and-forget) so
             # a slow or failed launch never delays server readiness.
             executor = BrowserToolExecutor()
-            self._warm_up_task = asyncio.create_task(executor.warm_up())
+            self._warm_up_task = asyncio.create_task(self._warm_and_close(executor))
 
             # Pre-creating all these classes prevents processing which costs
             # significant time per tool on the first conversation invocation.
@@ -52,6 +57,15 @@ class ToolPreloadService:
         except Exception:
             _logger.exception("Error preloading chromium")
             return False
+
+    @staticmethod
+    async def _warm_and_close(executor: BrowserToolExecutor) -> None:
+        try:
+            await executor.warm_up()
+        except Exception:
+            _logger.debug("Browser warm-up failed", exc_info=True)
+        finally:
+            await asyncio.to_thread(executor.close)
 
     async def stop(self) -> None:
         """Stop the tool preload process."""

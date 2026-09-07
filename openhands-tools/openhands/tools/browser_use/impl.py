@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import builtins
 import functools
 import json
@@ -937,6 +938,17 @@ class BrowserToolExecutor(ToolExecutor[BrowserAction, BrowserObservation]):
         Best-effort: any failure is swallowed, leaving the browser to launch
         lazily on first use exactly as before.
         """
+        future = self._async_executor.portal.start_task_soon(self._warm_up_session)
+        pending = asyncio.wrap_future(future)
+        try:
+            await asyncio.shield(pending)
+        except asyncio.CancelledError:
+            # Finish driver teardown on its owning loop before the caller's
+            # loop can shut down; cancelling Playwright startup strands tasks.
+            await pending
+            raise
+
+    async def _warm_up_session(self) -> None:
         try:
             await self._ensure_initialized()
         except Exception:
