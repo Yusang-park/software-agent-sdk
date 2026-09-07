@@ -2,6 +2,7 @@
 
 import asyncio
 import builtins
+import json
 import tempfile
 import threading
 import time
@@ -25,6 +26,7 @@ from openhands.tools.browser_use.definition import (
     BrowserNavigateAction,
     BrowserObservation,
     BrowserSetViewportAction,
+    BrowserTypeAction,
 )
 from openhands.tools.browser_use.impl import (
     DEFAULT_BROWSER_ACTION_TIMEOUT_SECONDS,
@@ -541,9 +543,14 @@ async def test_a_click_returns_the_page_it_produced(mock_click, mock_browser_exe
     for the rest.
     """
     mock_click.return_value = "Click successful"
-    mock_browser_executor._server._get_browser_state = AsyncMock(
-        return_value='{"interactive_elements": [{"index": 7, "text": "Next"}]}'
-    )
+
+    async def page_state(include_screenshot):
+        state: dict[str, Any] = {"interactive_elements": [{"index": 7, "text": "Next"}]}
+        if include_screenshot:
+            state["screenshot"] = "cGl4ZWxz"
+        return json.dumps(state)
+
+    mock_browser_executor._server._get_browser_state = AsyncMock(side_effect=page_state)
 
     result = await mock_browser_executor._execute_action(
         BrowserClickAction(index=5, new_tab=False)
@@ -555,6 +562,23 @@ async def test_a_click_returns_the_page_it_produced(mock_click, mock_browser_exe
     assert "Click successful" in text
     # The next index is available without a second round trip.
     assert '"index": 7' in text
+    assert result.screenshot_data == "cGl4ZWxz"
+
+
+@patch("openhands.tools.browser_use.impl.BrowserToolExecutor.type_secret_text")
+async def test_secret_entry_does_not_capture_the_returned_page(
+    mock_type_secret, mock_browser_executor
+):
+    mock_type_secret.return_value = "Typed registered secret"
+    mock_browser_executor._server._get_browser_state = AsyncMock(return_value="{}")
+
+    result = await mock_browser_executor._execute_action(
+        BrowserTypeAction(index=5, secret_name="account"),
+        secret_text="private-value",
+    )
+
+    assert result.screenshot_data is None
+    mock_browser_executor._server._get_browser_state.assert_awaited_once_with(False)
 
 
 @patch("openhands.tools.browser_use.impl.BrowserToolExecutor.set_viewport")
