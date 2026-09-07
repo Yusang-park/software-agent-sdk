@@ -853,7 +853,8 @@ class BrowserToolExecutor(ToolExecutor[BrowserAction, BrowserObservation]):
                 # applied to the rest.
                 try:
                     state_text, screenshot_data = await self._browser_state_payload(
-                        getattr(action, "include_screenshot", False)
+                        # Credential entry can leave a private value on screen.
+                        secret_text is None
                     )
                 except Exception:
                     # The action already happened. Reading the page it produced

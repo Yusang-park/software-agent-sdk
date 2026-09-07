@@ -1,3 +1,4 @@
+import base64
 import json
 import os
 import socket
@@ -244,6 +245,9 @@ class TestBrowserExecutorE2E:
         assert not result.is_error
         output_text = result.text.lower()
         assert "successfully" in output_text or "navigated" in output_text
+        assert result.screenshot_data
+        pixels = base64.b64decode(result.screenshot_data, validate=True)
+        assert pixels.startswith((b"\x89PNG\r\n\x1a\n", b"\xff\xd8\xff"))
 
     def test_get_state_action(
         self, browser_executor: BrowserToolExecutor, test_server: str
