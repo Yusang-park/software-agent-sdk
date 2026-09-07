@@ -5,7 +5,33 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from openhands.tools.browser_use.impl import BrowserToolExecutor
 from openhands.tools.browser_use.playwright_server import PlaywrightBrowserServer
+
+
+@pytest.mark.asyncio
+async def test_browser_state_excludes_zero_area_targets():
+    executable = BrowserToolExecutor.check_chromium_available()
+    if executable is None:
+        pytest.skip("Chromium is not installed")
+    server = PlaywrightBrowserServer()
+    try:
+        await server.start(headless=True, executable_path=executable)
+        page = await server.get_current_page()
+        await page.set_content(
+            "<button onclick=\"this.textContent='Opened'\">Open user</button>"
+            '<ol tabindex="-1" style="width:300px;height:0;margin:0"></ol>'
+            '<button style="width:0;height:0;padding:0;border:0;overflow:hidden">'
+            "Collapsed</button>"
+        )
+
+        state = json.loads(await server.get_browser_state(include_screenshot=False))
+
+        assert [item["text"] for item in state["interactive_elements"]] == ["Open user"]
+        await server.click(state["interactive_elements"][0]["index"])
+        assert await page.get_by_role("button", name="Opened").count() == 1
+    finally:
+        await server.close()
 
 
 @pytest.fixture

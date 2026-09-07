@@ -51,7 +51,10 @@ _STATE_SCRIPT = r"""
     '[role="button"]', '[role="link"]', '[tabindex]'
   ].join(',');
   const candidates = Array.from(document.querySelectorAll(selector))
-    .filter(rendered).slice(0, LIMIT);
+    .filter((element) => {
+      const rect = element.getBoundingClientRect();
+      return rendered(element) && rect.width > 0 && rect.height > 0;
+    }).slice(0, LIMIT);
   const interactive = candidates.map((element, index) => {
     element.setAttribute(INDEX, String(index));
     const rect = element.getBoundingClientRect();
