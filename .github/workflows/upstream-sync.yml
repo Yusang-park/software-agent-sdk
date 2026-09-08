@@ -39,7 +39,26 @@ jobs:
 
                   git config user.name "github-actions[bot]"
                   git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-                  git merge --no-edit upstream/main
+
+                  # A conflict here is a real divergence a person has to
+                  # resolve, and the run said so only as "exit code 1" with the
+                  # conflicting paths buried in the log. Say what conflicted, in
+                  # the summary, and leave the checkout clean; the run still
+                  # fails, because the fork really is behind.
+                  if ! git merge --no-edit upstream/main; then
+                    {
+                      echo "## Upstream merge conflicts"
+                      echo
+                      echo "This fork's \`main\` is $(git rev-list --count HEAD..upstream/main) commits behind"
+                      echo "upstream and $(git rev-list --count upstream/main..HEAD) ahead."
+                      echo "These paths need a human merge:"
+                      echo
+                      git diff --name-only --diff-filter=U | sed 's/^/- /'
+                    } >> "$GITHUB_STEP_SUMMARY"
+                    git merge --abort
+                    echo "::error::Upstream main does not merge cleanly; see the job summary."
+                    exit 1
+                  fi
                   git push origin HEAD:main
                   echo "changed=true" >> "$GITHUB_OUTPUT"
 

@@ -27,10 +27,18 @@ jobs:
             # Use PAT so the push triggers CI workflows that will complete and
             # satisfy branch protection. We can't use [skip ci] because the Vercel
             # GitHub App creates stuck checks that block merging.
+            #
+            # The fork does not hold that upstream secret, so `token:` resolved
+            # to the empty string and checkout failed with "Input required and
+            # not supplied: token" -- every merge to this fork's main produced a
+            # red run that removed nothing. Fall back to the job's own token: a
+            # push made with it does not start further workflows, which costs
+            # the re-run this comment is about and is strictly better than not
+            # running at all.
             - uses: actions/checkout@v7
               with:
                   ref: ${{ github.event.pull_request.head.ref }}
-                  token: ${{ secrets.OPENHANDS_BOT_GITHUB_PAT_PUBLIC }}
+                  token: ${{ secrets.OPENHANDS_BOT_GITHUB_PAT_PUBLIC || github.token }}
 
             - name: Remove .pr/ directory
               id: remove
@@ -189,7 +197,7 @@ jobs:
             - uses: actions/checkout@v7
               with:
                   ref: ${{ github.event.pull_request.base.ref }}
-                  token: ${{ secrets.OPENHANDS_BOT_GITHUB_PAT_PUBLIC }}
+                  token: ${{ secrets.OPENHANDS_BOT_GITHUB_PAT_PUBLIC || github.token }}
 
             - name: Remove .pr/ directory
               id: remove
