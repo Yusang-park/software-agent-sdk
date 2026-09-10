@@ -242,10 +242,16 @@ async def test_capture_element_photographs_the_section_that_owns_the_text(
     element.bounding_box = AsyncMock(
         return_value={"x": 0.0, "y": 7843.4, "width": 390.0, "height": 1210.6}
     )
-    element.screenshot = AsyncMock(return_value=b"jpeg-bytes")
+    element.screenshot = AsyncMock(return_value=b"element-bytes")
     handle = MagicMock()
     handle.as_element.return_value = element
     page.evaluate_handle = AsyncMock(return_value=handle)
+    page.screenshot = AsyncMock(return_value=b"jpeg-bytes")
+
+    async def evaluate(script, *args):
+        return [0, 120] if "scrollX" in script else None
+
+    page.evaluate = AsyncMock(side_effect=evaluate)
     page.title = AsyncMock(return_value="Bob Dylan")
     page.url = "https://app.example/artist/4"
     server = PlaywrightBrowserServer()
@@ -257,7 +263,20 @@ async def test_capture_element_photographs_the_section_that_owns_the_text(
         await server.start(headless=True, executable_path="/usr/bin/chromium")
         result = json.loads(await server.capture_element("Noteworthy Insights"))
 
-    element.screenshot.assert_awaited_once_with(type="jpeg", quality=80)
+    # The page around the element, not the element's box alone: a margin on
+    # every side, in document coordinates (viewport box + scroll).
+    page.screenshot.assert_awaited_once_with(
+        full_page=True,
+        clip={
+            "x": 0.0,
+            "y": 7843.4 + 120 - 16,
+            "width": 390.0 + 32,
+            "height": 1210.6 + 32,
+        },
+        type="jpeg",
+        quality=80,
+    )
+    element.screenshot.assert_not_awaited()
     assert result["url"] == "https://app.example/artist/4"
     assert result["text"] == "All Noteworthy Insights"
     assert result["captured"] == {

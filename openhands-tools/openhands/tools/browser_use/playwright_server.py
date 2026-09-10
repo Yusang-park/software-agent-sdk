@@ -13,6 +13,7 @@ from playwright.async_api import (
     BrowserContext,
     CDPSession,
     Error as PlaywrightError,
+    FloatRect,
     Locator,
     Page,
     Playwright,
@@ -263,6 +264,12 @@ _RESTORE_OVERLAYS_SCRIPT = r"""
 # half second apart, two seconds in all.
 CAPTURE_ELEMENT_ATTEMPTS = 4
 CAPTURE_ELEMENT_RETRY_MS = 500
+# The page around the captured element, in CSS pixels on every side. An element
+# screenshot is clipped to the element's box, so a white card on a white
+# page reads as bare content -- its corners, shadow and margin are outside the
+# box (Pilot d5c378d9, 2026-09-11: the Noteworthy Insights panel came back as
+# text on white). A margin shows the card as a card.
+CAPTURE_ELEMENT_MARGIN_PX = 16
 # When nothing on the page shows the text, the page is walked to the bottom a
 # screen at a time so anything deferred mounts, looking again after each
 # step. On Pilot 4625ca37 (2026-09-11) three of four captures of a section
@@ -626,7 +633,20 @@ class PlaywrightBrowserServer:
             options["mask_color"] = "#000000"
         await element.evaluate(_HIDE_OVERLAYS_SCRIPT)
         try:
-            screenshot = await element.screenshot(**options)
+            if box:
+                # The element's box plus a margin, in document coordinates,
+                # so the picture shows the card and the page around it.
+                scroll_x, scroll_y = await page.evaluate("() => [scrollX, scrollY]")
+                margin = CAPTURE_ELEMENT_MARGIN_PX
+                clip: FloatRect = {
+                    "x": max(0.0, box["x"] + scroll_x - margin),
+                    "y": max(0.0, box["y"] + scroll_y - margin),
+                    "width": box["width"] + 2 * margin,
+                    "height": box["height"] + 2 * margin,
+                }
+                screenshot = await page.screenshot(full_page=True, clip=clip, **options)
+            else:
+                screenshot = await element.screenshot(**options)
         finally:
             await page.evaluate(_RESTORE_OVERLAYS_SCRIPT)
         captured = dict(summary if isinstance(summary, dict) else {})

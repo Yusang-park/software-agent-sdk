@@ -338,7 +338,7 @@ class TestBrowserExecutorE2E:
         height = _jpeg_height(pixels)
         # The section is about 420px tall; the viewport is 800 and the
         # overview card above it over 1000.
-        assert 300 < height < 700, height
+        assert 300 < height < 750, height
 
         missing = browser_executor(BrowserCaptureElementAction(text="Playlists"))
         assert missing.is_error
