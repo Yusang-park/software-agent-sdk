@@ -232,7 +232,12 @@ async def test_capture_element_photographs_the_section_that_owns_the_text(
     starter, _, _, _, page = playwright_runtime
     element = MagicMock()
     element.evaluate = AsyncMock(
-        return_value={"tag": "section", "id": "", "text": "All Noteworthy Insights"}
+        return_value={
+            "tag": "section",
+            "id": "",
+            "top": 72,
+            "text": "All Noteworthy Insights",
+        }
     )
     element.bounding_box = AsyncMock(
         return_value={"x": 0.0, "y": 7843.4, "width": 390.0, "height": 1210.6}
@@ -258,6 +263,7 @@ async def test_capture_element_photographs_the_section_that_owns_the_text(
     assert result["captured"] == {
         "tag": "section",
         "id": "",
+        "top": 72,
         "box": {"x": 0, "y": 7843, "width": 390, "height": 1211},
     }
     assert base64.b64decode(result["screenshot"]) == b"jpeg-bytes"
@@ -304,11 +310,47 @@ async def test_capture_element_hides_a_fixed_header_painted_over_the_section():
 
 
 @pytest.mark.asyncio
+async def test_capture_element_waits_for_a_section_still_mounting(playwright_runtime):
+    """cef12908 (2026-09-10): the capture ran after the scroll that brought the
+    section into view, and the DOM had not mounted it yet. A few short looks
+    find it; a real absence still answers within two seconds."""
+    from openhands.tools.browser_use import playwright_server as module
+
+    starter, _, _, _, page = playwright_runtime
+    element = MagicMock()
+    element.evaluate = AsyncMock(return_value={"tag": "section", "id": "", "text": "x"})
+    element.bounding_box = AsyncMock(return_value=None)
+    element.screenshot = AsyncMock(return_value=b"jpeg-bytes")
+    empty = MagicMock()
+    empty.as_element.return_value = None
+    found = MagicMock()
+    found.as_element.return_value = element
+    page.evaluate_handle = AsyncMock(side_effect=[empty, empty, found])
+    page.wait_for_timeout = AsyncMock()
+    page.title = AsyncMock(return_value="Bob Dylan")
+    page.url = "https://app.example/artist/4"
+    server = PlaywrightBrowserServer()
+
+    with patch(
+        "openhands.tools.browser_use.playwright_server.async_playwright",
+        return_value=starter,
+    ):
+        await server.start(headless=True, executable_path="/usr/bin/chromium")
+        result = json.loads(await server.capture_element("Noteworthy Insights"))
+
+    assert "screenshot" in result
+    assert page.evaluate_handle.await_count == 3
+    assert page.wait_for_timeout.await_count == 2
+    page.wait_for_timeout.assert_awaited_with(module.CAPTURE_ELEMENT_RETRY_MS)
+
+
+@pytest.mark.asyncio
 async def test_capture_element_with_no_match_takes_no_picture(playwright_runtime):
     starter, _, _, _, page = playwright_runtime
     handle = MagicMock()
     handle.as_element.return_value = None
     page.evaluate_handle = AsyncMock(return_value=handle)
+    page.wait_for_timeout = AsyncMock()
     page.title = AsyncMock(return_value="Bob Dylan")
     page.url = "https://app.example/artist/4"
     server = PlaywrightBrowserServer()

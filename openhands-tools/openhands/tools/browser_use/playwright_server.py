@@ -149,12 +149,16 @@ _CAPTURE_TARGET_SCRIPT = r"""
       (element) => rendered(element)
         && (element.innerText || '').toLowerCase().includes(needle)
     );
-    // The deepest holder: one none of whose descendants also holds the text.
-    match = holders.find(
+    // The deepest holders: those none of whose descendants also hold the
+    // text; among them the one whose own text is shortest -- the label
+    // itself rather than a paragraph that mentions it.
+    const deepest = holders.filter(
       (element) => !holders.some(
         (other) => other !== element && element.contains(other)
       )
-    ) || null;
+    );
+    deepest.sort((a, b) => (a.innerText || '').length - (b.innerText || '').length);
+    match = deepest[0] || null;
   }
   if (!match) return null;
   const SECTION = [
@@ -188,7 +192,11 @@ _CAPTURE_TARGET_SCRIPT = r"""
       node = node.parentElement;
     }
   }
-  chosen.scrollIntoView({block: 'start', inline: 'nearest'});
+  // A section shorter than the viewport is centred, a taller one starts at
+  // the top; fixed and sticky elements over it are hidden for the picture
+  // by `_HIDE_OVERLAYS_SCRIPT`.
+  const fits = chosen.getBoundingClientRect().height < innerHeight;
+  chosen.scrollIntoView({block: fits ? 'center' : 'start', inline: 'nearest'});
   return chosen;
 }
 """
@@ -223,6 +231,12 @@ _RESTORE_OVERLAYS_SCRIPT = r"""
   }
 }
 """
+
+
+# How long a capture waits for a section that is still mounting: four looks a
+# half second apart, two seconds in all.
+CAPTURE_ELEMENT_ATTEMPTS = 4
+CAPTURE_ELEMENT_RETRY_MS = 500
 
 
 class PlaywrightBrowserServer:
@@ -454,12 +468,29 @@ class PlaywrightBrowserServer:
                 }
                 return true;
               };
-              const candidates = exactId ? [exactId] : Array.from(
+              const needle = wanted.toLowerCase();
+              const holders = exactId ? [exactId] : Array.from(
                 document.querySelectorAll('body *')
               ).filter((element) =>
-                (element.innerText || '').toLowerCase().includes(wanted.toLowerCase())
+                rendered(element)
+                && (element.innerText || '').toLowerCase().includes(needle)
               );
-              const target = candidates.find(rendered);
+              // Every ancestor of the element that shows the text also
+              // "shows" it, and document order lists ancestors first -- so
+              // the first match used to be the page's outermost container,
+              // and scrolling to it jumped to the top of the page. The
+              // target is the deepest holder, and among those the one whose
+              // own text is shortest: the label itself, not a paragraph that
+              // happens to mention it.
+              const deepest = holders.filter(
+                (element) => !holders.some(
+                  (other) => other !== element && element.contains(other)
+                )
+              );
+              deepest.sort((a, b) =>
+                (a.innerText || '').length - (b.innerText || '').length
+              );
+              const target = deepest[0];
               if (!target) return false;
               target.scrollIntoView({block: 'center', inline: 'nearest'});
               return (target.innerText || '').trim() || target.id || wanted;
@@ -491,8 +522,19 @@ class PlaywrightBrowserServer:
         """A picture of the one section that shows `text`, as JSON with the
         page address, the section's own text, and the element screenshot."""
         page = self._require_page()
-        handle = await page.evaluate_handle(_CAPTURE_TARGET_SCRIPT, text)
-        element = handle.as_element()
+        element = None
+        # A section a scroll just brought into view may still be mounting:
+        # on Pilot cef12908 (2026-09-10) the capture ran nine seconds after
+        # the scroll, the section was on screen for the person watching, and
+        # the DOM had no "Noteworthy Insights" yet. A few short waits cover
+        # a mount without turning a real absence into a long stall.
+        for attempt in range(CAPTURE_ELEMENT_ATTEMPTS):
+            handle = await page.evaluate_handle(_CAPTURE_TARGET_SCRIPT, text)
+            element = handle.as_element()
+            if element is not None:
+                break
+            if attempt + 1 < CAPTURE_ELEMENT_ATTEMPTS:
+                await page.wait_for_timeout(CAPTURE_ELEMENT_RETRY_MS)
         if element is None:
             return json.dumps(
                 {
@@ -512,6 +554,7 @@ class PlaywrightBrowserServer:
             r"""(element) => ({
               tag: element.tagName.toLowerCase(),
               id: (element.id || '').slice(0, 120),
+              top: Math.round(element.getBoundingClientRect().top),
               text: (element.innerText || '').trim()
                 .replace(/\s+/g, ' ').slice(0, 4000),
             })"""
