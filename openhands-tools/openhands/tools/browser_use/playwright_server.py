@@ -125,6 +125,75 @@ _STATE_SCRIPT = r"""
 """
 
 
+# The element a capture is of: the section that owns the text the caller named.
+# Playwright's element screenshot is what kevin-slack-bot's `screenshot.py`
+# does with `locator.screenshot()`, and it is what makes a picture of one
+# section a picture of that section -- a viewport frame shows whatever the
+# page had at that scroll position, and on Pilot 007f2c76 (2026-09-10) that
+# was the lookalike card above the one the check named.
+_CAPTURE_TARGET_SCRIPT = r"""
+(wanted) => {
+  const rendered = (element) => {
+    if (element.getClientRects().length === 0) return false;
+    for (let node = element; node; node = node.parentElement) {
+      const style = getComputedStyle(node);
+      if (style.visibility === 'hidden' || style.display === 'none') return false;
+    }
+    return true;
+  };
+  const byId = document.getElementById(wanted);
+  let match = byId && rendered(byId) ? byId : null;
+  if (!match) {
+    const needle = wanted.toLowerCase();
+    const holders = Array.from(document.querySelectorAll('body *')).filter(
+      (element) => rendered(element)
+        && (element.innerText || '').toLowerCase().includes(needle)
+    );
+    // The deepest holder: one none of whose descendants also holds the text.
+    match = holders.find(
+      (element) => !holders.some(
+        (other) => other !== element && element.contains(other)
+      )
+    ) || null;
+  }
+  if (!match) return null;
+  const SECTION = [
+    'section', 'article', 'aside', 'form', 'li', 'fieldset', 'table',
+    '[role="region"]', '[role="article"]', '[role="complementary"]',
+    '[role="group"]', '[role="dialog"]', '[data-testid]'
+  ].join(',');
+  const tooTall = Math.max(innerHeight * 3, 1200);
+  // Climb from the text to the section that owns it: the nearest ancestor
+  // that is a section-shaped element and not most of the page.
+  let node = match;
+  let chosen = null;
+  while (node && node !== document.body && node.tagName !== 'MAIN') {
+    const height = node.getBoundingClientRect().height;
+    if (height > tooTall) break;
+    if (node !== match && node.matches(SECTION) && height >= 40) {
+      chosen = node;
+      break;
+    }
+    node = node.parentElement;
+  }
+  if (!chosen) {
+    // No section-shaped ancestor: the tallest ancestor that still fits a
+    // few screens, so the picture is the block around the text and not a
+    // single line of it.
+    node = match;
+    chosen = match;
+    while (node && node !== document.body && node.tagName !== 'MAIN') {
+      if (node.getBoundingClientRect().height > tooTall) break;
+      chosen = node;
+      node = node.parentElement;
+    }
+  }
+  chosen.scrollIntoView({block: 'start', inline: 'nearest'});
+  return chosen;
+}
+"""
+
+
 class PlaywrightBrowserServer:
     """One persistent Playwright Chromium session shared by browser tools."""
 
@@ -386,6 +455,60 @@ class PlaywrightBrowserServer:
         page = self._require_page()
         await page.set_viewport_size({"width": width, "height": height})
         return f"Viewport set to {width}x{height}"
+
+    async def capture_element(self, text: str) -> str:
+        """A picture of the one section that shows `text`, as JSON with the
+        page address, the section's own text, and the element screenshot."""
+        page = self._require_page()
+        handle = await page.evaluate_handle(_CAPTURE_TARGET_SCRIPT, text)
+        element = handle.as_element()
+        if element is None:
+            return json.dumps(
+                {
+                    "url": page.url,
+                    "title": await page.title(),
+                    "captured": None,
+                    "error": (
+                        f"No element on the page shows {text!r}, so nothing was "
+                        "captured. It may not have loaded yet, may be behind a "
+                        "tab, or may be on another page. Read browser_get_state "
+                        "or browser_find before concluding it is absent."
+                    ),
+                },
+                indent=2,
+            )
+        summary = await element.evaluate(
+            r"""(element) => ({
+              tag: element.tagName.toLowerCase(),
+              id: (element.id || '').slice(0, 120),
+              text: (element.innerText || '').trim()
+                .replace(/\s+/g, ' ').slice(0, 4000),
+            })"""
+        )
+        box = await element.bounding_box()
+        options: dict[str, Any] = {"type": "jpeg", "quality": 80}
+        if self._sensitive_values:
+            options["mask"] = await self._screenshot_masks(page)
+            options["mask_color"] = "#000000"
+        screenshot = await element.screenshot(**options)
+        captured = dict(summary if isinstance(summary, dict) else {})
+        if box:
+            captured["box"] = {
+                "x": round(box["x"]),
+                "y": round(box["y"]),
+                "width": round(box["width"]),
+                "height": round(box["height"]),
+            }
+        return json.dumps(
+            {
+                "url": page.url,
+                "title": await page.title(),
+                "text": captured.pop("text", ""),
+                "captured": captured,
+                "screenshot": base64.b64encode(screenshot).decode(),
+            },
+            indent=2,
+        )
 
     async def get_storage(self) -> str:
         context = self._require_context()
