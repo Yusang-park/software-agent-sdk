@@ -219,6 +219,27 @@ _CAPTURE_TARGET_SCRIPT = r"""
     if (height > tooTall || height > sectionHeight * 1.6 + 240) break;
     if (paints(node)) { chosen = node; break; }
   }
+  // The frame around the card, when there is one: an ancestor that hugs the
+  // chosen element by no more than padding on every side. A page column, a
+  // grid cell or the content area is never that close, so it can never be
+  // picked; a wrapper holding the card plus a header or a sibling is bigger
+  // than the bound and is skipped, which is right -- it is not the frame.
+  const HUG = 48;
+  for (let level = 0; level < 3; level += 1) {
+    const parent = chosen.parentElement;
+    if (!parent || parent === document.body || parent.tagName === 'MAIN') break;
+    const inner = chosen.getBoundingClientRect();
+    const outer = parent.getBoundingClientRect();
+    const gaps = [inner.left - outer.left, outer.right - inner.right,
+                  inner.top - outer.top, outer.bottom - inner.bottom];
+    // Hugs: no side further than padding. Adds: at least one side further
+    // than the card itself, or the wrapper is the same box under another
+    // name and there is nothing to gain by taking it.
+    const hugs = gaps.every((gap) => gap <= HUG);
+    const adds = gaps.some((gap) => gap > 0.5);
+    if (!hugs || !adds) break;
+    chosen = parent;
+  }
   // A section shorter than the viewport is centred, a taller one starts at
   // the top; fixed and sticky elements over it are hidden for the picture
   // by `_HIDE_OVERLAYS_SCRIPT`.

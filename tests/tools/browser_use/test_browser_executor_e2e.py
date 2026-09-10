@@ -136,9 +136,10 @@ header { position: fixed; top: 0; left: 0; right: 0; height: 60px; background: #
             if (mounted || scrollY < 600) return;
             mounted = true;
             document.getElementById('noteworthy-host').innerHTML =
+                '<div id="noteworthy-frame" style="padding: 12px">' +
                 '<div class="panel" id="noteworthy-panel"><section id="noteworthy">' +
                 '<h3>All Noteworthy Insights</h3><p>Spotify Followers Increased Growth</p>' +
-                '<div style="height: 300px; background: #eee"></div></section></div>';
+                '<div style="height: 300px; background: #eee"></div></section></div></div>';
         });
     </script>
     <section id="lazy-host"></section>
@@ -325,8 +326,10 @@ class TestBrowserExecutorE2E:
         # The section is not in the DOM until the page has been scrolled past
         # the overview; the capture walked there itself. And the picture is
         # the painted panel around the section, not the section's content.
+        # ... and then the frame that hugs the panel by padding alone, never
+        # the host column around it, which is far wider than the panel.
         assert state["captured"]["tag"] == "div"
-        assert state["captured"]["id"] == "noteworthy-panel"
+        assert state["captured"]["id"] == "noteworthy-frame"
         # Centred: a section that fits the viewport is not parked under the
         # fixed 60px search bar.
         assert state["captured"]["top"] >= 60, state["captured"]
