@@ -264,6 +264,46 @@ async def test_capture_element_photographs_the_section_that_owns_the_text(
 
 
 @pytest.mark.asyncio
+async def test_capture_element_hides_a_fixed_header_painted_over_the_section():
+    """Pilot cef12908: the section was scrolled to the top of the viewport and
+    photographed with the site's fixed header over its title. The header is
+    hidden for the capture and visible again after it."""
+    executable = BrowserToolExecutor.check_chromium_available()
+    if executable is None:
+        pytest.skip("Chromium is not installed")
+    from io import BytesIO
+
+    from PIL import Image
+
+    server = PlaywrightBrowserServer()
+    try:
+        await server.start(headless=True, executable_path=executable)
+        page = await server.get_current_page()
+        await page.set_content(
+            '<header style="position:fixed;top:0;left:0;right:0;height:60px;'
+            'background:rgb(255,0,0)">Site</header>'
+            '<div style="height:2000px"></div>'
+            '<section style="height:400px;background:rgb(255,255,255)">'
+            "<p>Noteworthy Insights</p></section>"
+            '<div style="height:2000px"></div>'
+        )
+
+        result = json.loads(await server.capture_element("Noteworthy Insights"))
+
+        picture = Image.open(BytesIO(base64.b64decode(result["screenshot"])))
+        pixel = picture.convert("RGB").getpixel((picture.width - 5, 5))
+        assert isinstance(pixel, tuple)
+        red, green, blue = pixel[:3]
+        assert green > 200 and blue > 200, (red, green, blue)
+        header_visibility = await page.evaluate(
+            "getComputedStyle(document.querySelector('header')).visibility"
+        )
+        assert header_visibility == "visible"
+    finally:
+        await server.close()
+
+
+@pytest.mark.asyncio
 async def test_capture_element_with_no_match_takes_no_picture(playwright_runtime):
     starter, _, _, _, page = playwright_runtime
     handle = MagicMock()
