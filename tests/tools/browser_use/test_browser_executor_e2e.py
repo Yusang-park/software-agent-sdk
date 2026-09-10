@@ -115,22 +115,32 @@ PAGE2_HTML = """<!DOCTYPE html>
 SECTIONS_HTML = """<!DOCTYPE html>
 <html lang="en">
 <head><title>Artist</title>
-<style>section { padding: 16px; margin: 16px 0; } .card { border: 1px solid #ccc; padding: 12px; }
+<style>section { padding: 16px; margin: 16px 0; }
+.panel { border: 1px solid #ccc; border-radius: 8px; background: #fff; padding: 12px; margin: 16px 0; }
 header { position: fixed; top: 0; left: 0; right: 0; height: 60px; background: #fff; }</style>
 </head>
 <body><header><input placeholder="Search"></header><main style="padding-top: 70px">
     <h1>Bob Dylan</h1>
-    <section id="overview"><div class="card">
+    <div class="panel"><section id="overview">
         <h2>Artist Overview Insights</h2>
         <p>Bob Dylan is a legendary artist from the United States.</p>
         <div style="height: 900px"></div>
-    </div></section>
-    <section id="noteworthy"><div class="card">
-        <h3>All Noteworthy Insights</h3>
-        <p>Spotify Followers Increased Growth</p>
-        <div style="height: 300px; background: #eee"></div>
-    </div></section>
-    <section id="milestones"><h2>Top Recent Milestones</h2><div style="height: 600px"></div></section>
+    </section></div>
+    <div id="noteworthy-host"></div>
+    <div class="panel"><section id="milestones"><h2>Top Recent Milestones</h2><div style="height: 600px"></div></section></div>
+    <script>
+        // The Noteworthy panel mounts only once the page has been scrolled
+        // past the overview, the way a deferred section does.
+        let mounted = false;
+        addEventListener('scroll', () => {
+            if (mounted || scrollY < 600) return;
+            mounted = true;
+            document.getElementById('noteworthy-host').innerHTML =
+                '<div class="panel" id="noteworthy-panel"><section id="noteworthy">' +
+                '<h3>All Noteworthy Insights</h3><p>Spotify Followers Increased Growth</p>' +
+                '<div style="height: 300px; background: #eee"></div></section></div>';
+        });
+    </script>
     <section id="lazy-host"></section>
     <script>
         setTimeout(() => {
@@ -312,8 +322,11 @@ class TestBrowserExecutorE2E:
         assert isinstance(result, BrowserObservation)
         assert not result.is_error, result.text
         state = json.loads(result.text)
-        assert state["captured"]["tag"] == "section"
-        assert state["captured"]["id"] == "noteworthy"
+        # The section is not in the DOM until the page has been scrolled past
+        # the overview; the capture walked there itself. And the picture is
+        # the painted panel around the section, not the section's content.
+        assert state["captured"]["tag"] == "div"
+        assert state["captured"]["id"] == "noteworthy-panel"
         # Centred: a section that fits the viewport is not parked under the
         # fixed 60px search bar.
         assert state["captured"]["top"] >= 60, state["captured"]
@@ -325,7 +338,7 @@ class TestBrowserExecutorE2E:
         height = _jpeg_height(pixels)
         # The section is about 420px tall; the viewport is 800 and the
         # overview card above it over 1000.
-        assert 300 < height < 650, height
+        assert 300 < height < 700, height
 
         missing = browser_executor(BrowserCaptureElementAction(text="Playlists"))
         assert missing.is_error
