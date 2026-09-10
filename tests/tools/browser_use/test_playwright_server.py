@@ -223,6 +223,68 @@ async def test_viewport_changes_the_page_without_replacing_its_session(
 
 
 @pytest.mark.asyncio
+async def test_capture_element_photographs_the_section_that_owns_the_text(
+    playwright_runtime,
+):
+    """`locator.screenshot()` of the section itself, whole; the JSON carries
+    the page address and the section's text and leaves the bytes to the
+    `screenshot` key the executor lifts out."""
+    starter, _, _, _, page = playwright_runtime
+    element = MagicMock()
+    element.evaluate = AsyncMock(
+        return_value={"tag": "section", "id": "", "text": "All Noteworthy Insights"}
+    )
+    element.bounding_box = AsyncMock(
+        return_value={"x": 0.0, "y": 7843.4, "width": 390.0, "height": 1210.6}
+    )
+    element.screenshot = AsyncMock(return_value=b"jpeg-bytes")
+    handle = MagicMock()
+    handle.as_element.return_value = element
+    page.evaluate_handle = AsyncMock(return_value=handle)
+    page.title = AsyncMock(return_value="Bob Dylan")
+    page.url = "https://app.example/artist/4"
+    server = PlaywrightBrowserServer()
+
+    with patch(
+        "openhands.tools.browser_use.playwright_server.async_playwright",
+        return_value=starter,
+    ):
+        await server.start(headless=True, executable_path="/usr/bin/chromium")
+        result = json.loads(await server.capture_element("Noteworthy Insights"))
+
+    element.screenshot.assert_awaited_once_with(type="jpeg", quality=80)
+    assert result["url"] == "https://app.example/artist/4"
+    assert result["text"] == "All Noteworthy Insights"
+    assert result["captured"] == {
+        "tag": "section",
+        "id": "",
+        "box": {"x": 0, "y": 7843, "width": 390, "height": 1211},
+    }
+    assert base64.b64decode(result["screenshot"]) == b"jpeg-bytes"
+
+
+@pytest.mark.asyncio
+async def test_capture_element_with_no_match_takes_no_picture(playwright_runtime):
+    starter, _, _, _, page = playwright_runtime
+    handle = MagicMock()
+    handle.as_element.return_value = None
+    page.evaluate_handle = AsyncMock(return_value=handle)
+    page.title = AsyncMock(return_value="Bob Dylan")
+    page.url = "https://app.example/artist/4"
+    server = PlaywrightBrowserServer()
+
+    with patch(
+        "openhands.tools.browser_use.playwright_server.async_playwright",
+        return_value=starter,
+    ):
+        await server.start(headless=True, executable_path="/usr/bin/chromium")
+        result = json.loads(await server.capture_element("Playlists"))
+
+    assert result["captured"] is None and "screenshot" not in result
+    assert "No element on the page shows 'Playlists'" in result["error"]
+
+
+@pytest.mark.asyncio
 async def test_secret_input_is_filled_without_echoing_its_value(playwright_runtime):
     starter, _, _, _, page = playwright_runtime
     locator = MagicMock()

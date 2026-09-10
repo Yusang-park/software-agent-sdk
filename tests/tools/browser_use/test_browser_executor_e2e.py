@@ -12,6 +12,7 @@ from collections.abc import Generator
 import pytest
 
 from openhands.tools.browser_use.definition import (
+    BrowserCaptureElementAction,
     BrowserClickAction,
     BrowserCloseTabAction,
     BrowserFindAction,
@@ -111,6 +112,27 @@ PAGE2_HTML = """<!DOCTYPE html>
 </body>
 </html>"""
 
+SECTIONS_HTML = """<!DOCTYPE html>
+<html lang="en">
+<head><title>Artist</title>
+<style>section { padding: 16px; margin: 16px 0; } .card { border: 1px solid #ccc; padding: 12px; }</style>
+</head>
+<body><main>
+    <h1>Bob Dylan</h1>
+    <section id="overview"><div class="card">
+        <h2>Artist Overview Insights</h2>
+        <p>Bob Dylan is a legendary artist from the United States.</p>
+        <div style="height: 900px"></div>
+    </div></section>
+    <section id="noteworthy"><div class="card">
+        <h3>All Noteworthy Insights</h3>
+        <p>Spotify Followers Increased Growth</p>
+        <div style="height: 300px; background: #eee"></div>
+    </div></section>
+    <section id="milestones"><h2>Top Recent Milestones</h2><div style="height: 600px"></div></section>
+</main></body>
+</html>"""  # noqa: E501
+
 DELAYED_HTML = """<!DOCTYPE html>
 <html lang="en">
 <head><title>Delayed App</title></head>
@@ -174,6 +196,9 @@ def test_server() -> Generator[str]:
         with open(os.path.join(temp_dir, "delayed.html"), "w", encoding="utf-8") as f:
             f.write(DELAYED_HTML)
 
+        with open(os.path.join(temp_dir, "sections.html"), "w", encoding="utf-8") as f:
+            f.write(SECTIONS_HTML)
+
         # Start HTTP server
         port = _get_free_port()
         server_process = subprocess.Popen(
@@ -206,6 +231,20 @@ def test_server() -> Generator[str]:
         import shutil
 
         shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+def _jpeg_height(pixels: bytes) -> int:
+    """The image height from the JPEG's start-of-frame marker."""
+    index = 2
+    while index < len(pixels):
+        if pixels[index] != 0xFF:
+            raise ValueError("not a JPEG marker stream")
+        marker = pixels[index + 1]
+        if marker in (0xC0, 0xC1, 0xC2):
+            return int.from_bytes(pixels[index + 5 : index + 7], "big")
+        length = int.from_bytes(pixels[index + 2 : index + 4], "big")
+        index += 2 + length
+    raise ValueError("no start-of-frame marker")
 
 
 @pytest.fixture
@@ -248,6 +287,39 @@ class TestBrowserExecutorE2E:
         assert result.screenshot_data
         pixels = base64.b64decode(result.screenshot_data, validate=True)
         assert pixels.startswith((b"\x89PNG\r\n\x1a\n", b"\xff\xd8\xff"))
+
+    def test_capture_element_is_the_named_section_alone(
+        self, browser_executor: BrowserToolExecutor, test_server: str
+    ):
+        """The picture is the section that owns the text -- not the viewport,
+        not the taller lookalike card above it -- and the text beside it is
+        that section's own."""
+        browser_executor(BrowserNavigateAction(url=f"{test_server}/sections.html"))
+        time.sleep(0.3)
+
+        result = browser_executor(
+            BrowserCaptureElementAction(text="Noteworthy Insights")
+        )
+
+        assert isinstance(result, BrowserObservation)
+        assert not result.is_error, result.text
+        state = json.loads(result.text)
+        assert state["captured"]["tag"] == "section"
+        assert state["captured"]["id"] == "noteworthy"
+        assert "All Noteworthy Insights" in state["text"]
+        assert "Artist Overview" not in state["text"]
+        assert result.screenshot_data
+        pixels = base64.b64decode(result.screenshot_data, validate=True)
+        assert pixels.startswith(b"\xff\xd8\xff")
+        height = _jpeg_height(pixels)
+        # The section is about 420px tall; the viewport is 800 and the
+        # overview card above it over 1000.
+        assert 300 < height < 650, height
+
+        missing = browser_executor(BrowserCaptureElementAction(text="Playlists"))
+        assert missing.is_error
+        assert missing.screenshot_data is None
+        assert "No element on the page shows 'Playlists'" in missing.text
 
     def test_get_state_action(
         self, browser_executor: BrowserToolExecutor, test_server: str
