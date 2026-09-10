@@ -193,6 +193,37 @@ _CAPTURE_TARGET_SCRIPT = r"""
 }
 """
 
+# An element screenshot is the element's box *as painted*, so a fixed or sticky
+# element outside it -- a site header, a cookie bar -- lands inside the picture.
+# Scrolling the section to the top of the viewport puts its top edge exactly
+# under a fixed header: on Pilot cef12908 (2026-09-10) the Noteworthy Insights
+# section was photographed with the site's header over its title and date
+# range. Such elements are hidden for the capture and restored after it; one
+# inside the section, or one that contains it, is part of what was asked for.
+_HIDE_OVERLAYS_SCRIPT = r"""
+(target) => {
+  let hidden = 0;
+  for (const node of document.querySelectorAll('body *')) {
+    if (node.contains(target) || target.contains(node)) continue;
+    const position = getComputedStyle(node).position;
+    if (position !== 'fixed' && position !== 'sticky') continue;
+    node.dataset.ohCaptureVisibility = node.style.visibility;
+    node.style.visibility = 'hidden';
+    hidden += 1;
+  }
+  return hidden;
+}
+"""
+
+_RESTORE_OVERLAYS_SCRIPT = r"""
+() => {
+  for (const node of document.querySelectorAll('[data-oh-capture-visibility]')) {
+    node.style.visibility = node.dataset.ohCaptureVisibility;
+    delete node.dataset.ohCaptureVisibility;
+  }
+}
+"""
+
 
 class PlaywrightBrowserServer:
     """One persistent Playwright Chromium session shared by browser tools."""
@@ -490,7 +521,11 @@ class PlaywrightBrowserServer:
         if self._sensitive_values:
             options["mask"] = await self._screenshot_masks(page)
             options["mask_color"] = "#000000"
-        screenshot = await element.screenshot(**options)
+        await element.evaluate(_HIDE_OVERLAYS_SCRIPT)
+        try:
+            screenshot = await element.screenshot(**options)
+        finally:
+            await page.evaluate(_RESTORE_OVERLAYS_SCRIPT)
         captured = dict(summary if isinstance(summary, dict) else {})
         if box:
             captured["box"] = {
