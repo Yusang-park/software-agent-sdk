@@ -192,6 +192,32 @@ _CAPTURE_TARGET_SCRIPT = r"""
       node = node.parentElement;
     }
   }
+  // The card around the section, when there is one: the nearest ancestor
+  // that paints itself -- a border, a shadow, a rounded corner, a background
+  // of its own -- and is not much bigger than the section. A section is
+  // usually the content of a panel, and a picture of the content alone
+  // shows none of the panel (Pilot 4625ca37, 2026-09-11: the Noteworthy
+  // Insights section came back without the card that frames it).
+  const paints = (element) => {
+    const style = getComputedStyle(element);
+    if (style.boxShadow && style.boxShadow !== 'none') return true;
+    if (parseFloat(style.borderTopWidth) > 0 || parseFloat(style.borderLeftWidth) > 0) {
+      return true;
+    }
+    if (parseFloat(style.borderTopLeftRadius) > 0) return true;
+    const background = style.backgroundColor;
+    if (!background || background === 'transparent') return false;
+    const parent = element.parentElement;
+    const parentBackground = parent ? getComputedStyle(parent).backgroundColor : '';
+    return background !== 'rgba(0, 0, 0, 0)' && background !== parentBackground;
+  };
+  const sectionHeight = chosen.getBoundingClientRect().height;
+  for (let node = chosen.parentElement; node && node !== document.body
+       && node.tagName !== 'MAIN'; node = node.parentElement) {
+    const height = node.getBoundingClientRect().height;
+    if (height > tooTall || height > sectionHeight * 1.6 + 240) break;
+    if (paints(node)) { chosen = node; break; }
+  }
   // A section shorter than the viewport is centred, a taller one starts at
   // the top; fixed and sticky elements over it are hidden for the picture
   // by `_HIDE_OVERLAYS_SCRIPT`.
@@ -237,6 +263,19 @@ _RESTORE_OVERLAYS_SCRIPT = r"""
 # half second apart, two seconds in all.
 CAPTURE_ELEMENT_ATTEMPTS = 4
 CAPTURE_ELEMENT_RETRY_MS = 500
+# When nothing on the page shows the text, the page is walked to the bottom a
+# screen at a time so anything deferred mounts, looking again after each
+# step. On Pilot 4625ca37 (2026-09-11) three of four captures of a section
+# that mounts on scroll answered "no element shows", and the run spent
+# twenty calls scrolling and reading source between them.
+CAPTURE_ELEMENT_WALK_STEPS = 40
+CAPTURE_ELEMENT_WALK_SETTLE_MS = 250
+_MOUNT_WALK_SCRIPT = """
+() => {
+  scrollBy(0, Math.round(innerHeight * 0.9));
+  return scrollY + innerHeight >= document.documentElement.scrollHeight - 2;
+}
+"""
 
 
 class PlaywrightBrowserServer:
@@ -454,7 +493,26 @@ class PlaywrightBrowserServer:
 
     async def scroll_to_text(self, text: str) -> str:
         page = self._require_page()
-        found = await page.evaluate(
+        found = await self._scroll_to_text_once(page, text)
+        if not found:
+            # Not on the page yet: walk it a screen at a time so a deferred
+            # section mounts, and look again after each step.
+            for _ in range(CAPTURE_ELEMENT_WALK_STEPS):
+                at_bottom = await page.evaluate(_MOUNT_WALK_SCRIPT)
+                await page.wait_for_timeout(CAPTURE_ELEMENT_WALK_SETTLE_MS)
+                found = await self._scroll_to_text_once(page, text)
+                if found or at_bottom:
+                    break
+        if not found:
+            return (
+                f"No element on the page shows {text!r}. It may not have loaded "
+                "yet, may be behind a tab, or may be on another page. Read "
+                "browser_get_content before concluding it is absent."
+            )
+        return f"Scrolled to {found!r}"
+
+    async def _scroll_to_text_once(self, page: Page, text: str):
+        return await page.evaluate(
             """
             (wanted) => {
               const exactId = document.getElementById(wanted);
@@ -498,13 +556,6 @@ class PlaywrightBrowserServer:
             """,
             text,
         )
-        if not found:
-            return (
-                f"No element on the page shows {text!r}. It may not have loaded "
-                "yet, may be behind a tab, or may be on another page. Read "
-                "browser_get_content before concluding it is absent."
-            )
-        return f"Scrolled to {found!r}"
 
     async def find_visible_text(self, text: str, max_results: int = 10) -> str:
         page = self._require_page()
@@ -535,6 +586,15 @@ class PlaywrightBrowserServer:
                 break
             if attempt + 1 < CAPTURE_ELEMENT_ATTEMPTS:
                 await page.wait_for_timeout(CAPTURE_ELEMENT_RETRY_MS)
+        if element is None:
+            # Not on the page yet: walk it, so a deferred section mounts.
+            for _ in range(CAPTURE_ELEMENT_WALK_STEPS):
+                at_bottom = await page.evaluate(_MOUNT_WALK_SCRIPT)
+                await page.wait_for_timeout(CAPTURE_ELEMENT_WALK_SETTLE_MS)
+                handle = await page.evaluate_handle(_CAPTURE_TARGET_SCRIPT, text)
+                element = handle.as_element()
+                if element is not None or at_bottom:
+                    break
         if element is None:
             return json.dumps(
                 {

@@ -484,7 +484,13 @@ class TestScrollingToSomethingRatherThanTowardsIt:
             def is_closed(self):
                 return False
 
-            async def evaluate(self, script, arg):
+            async def wait_for_timeout(self, ms):
+                return None
+
+            async def evaluate(self, script, arg=None):
+                if arg is None:
+                    # The mount walk, not the target lookup: never found here.
+                    return False
                 seen["script"], seen["arg"] = script, arg
                 return evaluate_result
 
