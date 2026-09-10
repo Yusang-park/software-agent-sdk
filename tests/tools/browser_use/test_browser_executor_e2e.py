@@ -115,9 +115,10 @@ PAGE2_HTML = """<!DOCTYPE html>
 SECTIONS_HTML = """<!DOCTYPE html>
 <html lang="en">
 <head><title>Artist</title>
-<style>section { padding: 16px; margin: 16px 0; } .card { border: 1px solid #ccc; padding: 12px; }</style>
+<style>section { padding: 16px; margin: 16px 0; } .card { border: 1px solid #ccc; padding: 12px; }
+header { position: fixed; top: 0; left: 0; right: 0; height: 60px; background: #fff; }</style>
 </head>
-<body><main>
+<body><header><input placeholder="Search"></header><main style="padding-top: 70px">
     <h1>Bob Dylan</h1>
     <section id="overview"><div class="card">
         <h2>Artist Overview Insights</h2>
@@ -130,6 +131,13 @@ SECTIONS_HTML = """<!DOCTYPE html>
         <div style="height: 300px; background: #eee"></div>
     </div></section>
     <section id="milestones"><h2>Top Recent Milestones</h2><div style="height: 600px"></div></section>
+    <section id="lazy-host"></section>
+    <script>
+        setTimeout(() => {
+            document.getElementById('lazy-host').innerHTML =
+                '<div class="card"><h3>Audience Summary</h3><p>Primary Market United States</p></div>';
+        }, 600);
+    </script>
 </main></body>
 </html>"""  # noqa: E501
 
@@ -306,6 +314,9 @@ class TestBrowserExecutorE2E:
         state = json.loads(result.text)
         assert state["captured"]["tag"] == "section"
         assert state["captured"]["id"] == "noteworthy"
+        # Centred: a section that fits the viewport is not parked under the
+        # fixed 60px search bar.
+        assert state["captured"]["top"] >= 60, state["captured"]
         assert "All Noteworthy Insights" in state["text"]
         assert "Artist Overview" not in state["text"]
         assert result.screenshot_data
@@ -320,6 +331,36 @@ class TestBrowserExecutorE2E:
         assert missing.is_error
         assert missing.screenshot_data is None
         assert "No element on the page shows 'Playlists'" in missing.text
+
+    def test_a_scroll_to_text_lands_on_the_label_not_its_outermost_ancestor(
+        self, browser_executor: BrowserToolExecutor, test_server: str
+    ):
+        """cef12908 (2026-09-10): `to_text` "Noteworthy Insights" scrolled to
+        the page's outermost container -- every ancestor of the label also
+        contains the text and document order lists ancestors first -- and the
+        page jumped back to the top. The target is the label itself."""
+        browser_executor(BrowserNavigateAction(url=f"{test_server}/sections.html"))
+        time.sleep(0.3)
+
+        result = browser_executor(BrowserScrollAction(to_text="Noteworthy Insights"))
+
+        assert not result.is_error, result.text
+        assert result.text.startswith("Scrolled to 'All Noteworthy Insights'"), (
+            result.text[:120]
+        )
+
+    def test_capture_element_waits_for_a_section_that_mounts_late(
+        self, browser_executor: BrowserToolExecutor, test_server: str
+    ):
+        browser_executor(BrowserNavigateAction(url=f"{test_server}/sections.html"))
+        # No sleep: the lazy section mounts 600ms after load, inside the
+        # capture's own waiting.
+        result = browser_executor(BrowserCaptureElementAction(text="Audience Summary"))
+
+        assert not result.is_error, result.text
+        state = json.loads(result.text)
+        assert state["captured"]["id"] == "lazy-host"
+        assert "Primary Market United States" in state["text"]
 
     def test_get_state_action(
         self, browser_executor: BrowserToolExecutor, test_server: str
