@@ -120,6 +120,7 @@ SECTIONS_HTML = """<!DOCTYPE html>
 header { position: fixed; top: 0; left: 0; right: 0; height: 60px; background: #fff; }</style>
 </head>
 <body><header><input placeholder="Search"></header><main style="padding-top: 70px">
+    <div style="height: 100vh; background: #ddd">hero sized to the viewport</div>
     <h1>Bob Dylan</h1>
     <div class="panel"><section id="overview">
         <h2>Artist Overview Insights</h2>
@@ -136,7 +137,8 @@ header { position: fixed; top: 0; left: 0; right: 0; height: 60px; background: #
             if (mounted || scrollY < 600) return;
             mounted = true;
             document.getElementById('noteworthy-host').innerHTML =
-                '<div class="panel" id="noteworthy-panel"><section id="noteworthy">' +
+                '<div class="panel" id="noteworthy-panel" style="background: rgb(200, 230, 255)">' +
+                '<section id="noteworthy">' +
                 '<h3>All Noteworthy Insights</h3><p>Spotify Followers Increased Growth</p>' +
                 '<div style="height: 300px; background: #eee"></div></section></div>';
         });
@@ -336,6 +338,23 @@ class TestBrowserExecutorE2E:
         pixels = base64.b64decode(result.screenshot_data, validate=True)
         assert pixels.startswith(b"\xff\xd8\xff")
         height = _jpeg_height(pixels)
+        # The picture is the panel, not whatever sat at those coordinates
+        # after a full-page re-layout: its centre is the panel's colour.
+        from io import BytesIO
+
+        from PIL import Image
+
+        picture = Image.open(BytesIO(pixels)).convert("RGB")
+        # 16px margin + 12px frame padding puts the panel's own padding at
+        # (28, 28); a few pixels in is panel colour, not the grey block inside.
+        pixel = picture.getpixel((32, 32))
+        assert isinstance(pixel, tuple)
+        red, green, blue = pixel[:3]
+        assert abs(red - 200) < 12 and abs(green - 230) < 12 and abs(blue - 255) < 12, (
+            red,
+            green,
+            blue,
+        )
         # The section is about 420px tall; the viewport is 800 and the
         # overview card above it over 1000.
         assert 300 < height < 750, height

@@ -247,6 +247,9 @@ async def test_capture_element_photographs_the_section_that_owns_the_text(
     handle.as_element.return_value = element
     page.evaluate_handle = AsyncMock(return_value=handle)
     page.screenshot = AsyncMock(return_value=b"jpeg-bytes")
+    # 1210px tall on an 800px viewport: taken from the full page, in
+    # document coordinates (viewport box + scroll).
+    page.viewport_size = {"width": 390, "height": 800}
 
     async def evaluate(script, *args):
         return [0, 120] if "scrollX" in script else None

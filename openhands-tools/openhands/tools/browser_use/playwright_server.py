@@ -634,17 +634,45 @@ class PlaywrightBrowserServer:
         await element.evaluate(_HIDE_OVERLAYS_SCRIPT)
         try:
             if box:
-                # The element's box plus a margin, in document coordinates,
-                # so the picture shows the card and the page around it.
-                scroll_x, scroll_y = await page.evaluate("() => [scrollX, scrollY]")
+                # The element's box plus a margin, so the picture shows the
+                # card and the page around it. Taken from the viewport when
+                # it fits: a full-page capture re-lays the page out at its
+                # full height, and anything sized in `vh` moves everything
+                # below it -- on Pilot 83f7b5a0 (2026-09-11) the clip meant
+                # for the Noteworthy Insights card came back as the Event
+                # Analyzer section beneath it. Only a card taller than the
+                # viewport is taken from the full page, in document
+                # coordinates.
                 margin = CAPTURE_ELEMENT_MARGIN_PX
-                clip: FloatRect = {
-                    "x": max(0.0, box["x"] + scroll_x - margin),
-                    "y": max(0.0, box["y"] + scroll_y - margin),
-                    "width": box["width"] + 2 * margin,
-                    "height": box["height"] + 2 * margin,
-                }
-                screenshot = await page.screenshot(full_page=True, clip=clip, **options)
+                viewport = page.viewport_size or {"width": 0, "height": 0}
+                fits = (
+                    viewport["height"] > 0
+                    and box["height"] + 2 * margin <= viewport["height"]
+                )
+                clip: FloatRect
+                if fits:
+                    x = max(0.0, box["x"] - margin)
+                    y = max(0.0, box["y"] - margin)
+                    clip = {
+                        "x": x,
+                        "y": y,
+                        "width": min(box["width"] + 2 * margin, viewport["width"] - x),
+                        "height": min(
+                            box["height"] + 2 * margin, viewport["height"] - y
+                        ),
+                    }
+                    screenshot = await page.screenshot(clip=clip, **options)
+                else:
+                    scroll_x, scroll_y = await page.evaluate("() => [scrollX, scrollY]")
+                    clip = {
+                        "x": max(0.0, box["x"] + scroll_x - margin),
+                        "y": max(0.0, box["y"] + scroll_y - margin),
+                        "width": box["width"] + 2 * margin,
+                        "height": box["height"] + 2 * margin,
+                    }
+                    screenshot = await page.screenshot(
+                        full_page=True, clip=clip, **options
+                    )
             else:
                 screenshot = await element.screenshot(**options)
         finally:
