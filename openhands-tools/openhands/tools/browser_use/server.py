@@ -44,9 +44,6 @@ class CustomBrowserUseServer(PlaywrightBrowserServer):
     async def _set_viewport(self, width: int, height: int) -> str:
         return await self.set_viewport(width, height)
 
-    async def _capture_element(self, text: str) -> str:
-        return await self.capture_element(text)
-
     async def _get_storage(self) -> str:
         return await self.get_storage()
 
