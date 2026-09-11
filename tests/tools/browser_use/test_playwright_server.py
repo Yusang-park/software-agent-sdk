@@ -243,9 +243,18 @@ async def test_secret_input_is_filled_without_echoing_its_value(playwright_runti
 
 
 @pytest.mark.asyncio
-async def test_scroll_to_text_is_one_dom_operation(playwright_runtime):
+async def test_scroll_to_text_is_one_dom_operation_then_a_settled_read(
+    playwright_runtime,
+):
+    """One DOM operation finds and scrolls; what follows is only reading the
+    scroll position until it holds still. 79f2fa2b (2026-09-11): the frame was
+    taken while `scroll-behavior: smooth` was still moving the page, and the
+    section came out 200px below where it was sent."""
     starter, _, _, _, page = playwright_runtime
-    page.evaluate.return_value = "Noteworthy Insights"
+    page.evaluate = AsyncMock(
+        side_effect=["Noteworthy Insights", [0, 900], [0, 1180], [0, 1180]]
+    )
+    page.wait_for_timeout = AsyncMock()
     server = PlaywrightBrowserServer()
 
     with patch(
@@ -255,10 +264,29 @@ async def test_scroll_to_text_is_one_dom_operation(playwright_runtime):
         await server.start(headless=True, executable_path="/usr/bin/chromium")
         result = await server.scroll_to_text("Noteworthy Insights")
 
-    page.evaluate.assert_awaited_once()
-    assert page.evaluate.await_args.args[1] == "Noteworthy Insights"
-    assert "block: 'center'" in page.evaluate.await_args.args[0]
+    scroll_call = page.evaluate.await_args_list[0]
+    assert scroll_call.args[1] == "Noteworthy Insights"
+    assert "block: 'center'" in scroll_call.args[0]
+    assert "behavior: 'instant'" in scroll_call.args[0]
+    # Three position reads: the first, one that still moved, one that held.
+    assert page.evaluate.await_count == 4
+    assert page.wait_for_timeout.await_count == 2
     assert result == "Scrolled to 'Noteworthy Insights'"
+
+
+@pytest.mark.asyncio
+async def test_the_browser_is_launched_without_smooth_scrolling(playwright_runtime):
+    starter, _, browser, _, _ = playwright_runtime
+    server = PlaywrightBrowserServer()
+
+    with patch(
+        "openhands.tools.browser_use.playwright_server.async_playwright",
+        return_value=starter,
+    ):
+        await server.start(headless=True, executable_path="/usr/bin/chromium")
+
+    chromium = starter.start.return_value.chromium
+    assert "--disable-smooth-scrolling" in chromium.launch.await_args.kwargs["args"]
 
 
 @pytest.mark.asyncio

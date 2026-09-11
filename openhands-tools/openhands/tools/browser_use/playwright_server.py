@@ -132,6 +132,18 @@ _STATE_SCRIPT = r"""
 # run spent twenty calls scrolling and reading source between them.
 SCROLL_TO_TEXT_WALK_STEPS = 40
 SCROLL_TO_TEXT_WALK_SETTLE_MS = 250
+# After a scroll, the page is read only once it has stopped moving. Every
+# Chartmetric page sets `scroll-behavior: smooth`, so `scrollIntoView` starts
+# an animation and returns; the frame the SDK takes for the observation then
+# shows the section short of where it was sent (Pilot 79f2fa2b, 2026-09-11:
+# the Noteworthy Insights card 200px below centre; 30463b33 the same day
+# landed centred by timing alone). `behavior: 'instant'` and
+# `--disable-smooth-scrolling` remove both sources; the settle wait covers a
+# page that animates its own scroll position.
+SCROLL_SETTLE_POLL_MS = 50
+SCROLL_SETTLE_MAX_MS = 1000
+_SCROLL_POSITION_SCRIPT = "() => [scrollX, scrollY]"
+
 _MOUNT_WALK_SCRIPT = """
 () => {
   scrollBy(0, Math.round(innerHeight * 0.9));
@@ -188,7 +200,11 @@ class PlaywrightBrowserServer:
         self._playwright = await async_playwright().start()
         self._allowed_domains = tuple(allowed_domains or ())
         self._navigation_policy = navigation_policy
-        launch_args = ["--disable-dev-shm-usage"]
+        # Chromium animates wheel scrolls by default, and a frame taken right
+        # after `mouse.wheel` catches the page mid-animation; the site's own
+        # `scroll-behavior: smooth` does the same to `scrollIntoView`. Both
+        # off: an automation wants the page where it asked for it.
+        launch_args = ["--disable-dev-shm-usage", "--disable-smooth-scrolling"]
         if window_size is not None:
             launch_args.append(
                 f"--window-size={window_size['width']},{window_size['height']}"
@@ -351,7 +367,20 @@ class PlaywrightBrowserServer:
             raise ValueError("Scroll direction must be 'up' or 'down'")
         delta = viewport["height"] * (1 if direction == "down" else -1)
         await page.mouse.wheel(0, delta)
+        await self._settle_scroll(page)
         return f"Scrolled {direction}"
+
+    async def _settle_scroll(self, page: Page) -> None:
+        """Return once the scroll position has held still for one poll."""
+        previous = await page.evaluate(_SCROLL_POSITION_SCRIPT)
+        waited = 0
+        while waited < SCROLL_SETTLE_MAX_MS:
+            await page.wait_for_timeout(SCROLL_SETTLE_POLL_MS)
+            waited += SCROLL_SETTLE_POLL_MS
+            current = await page.evaluate(_SCROLL_POSITION_SCRIPT)
+            if current == previous:
+                return
+            previous = current
 
     async def scroll_to_text(self, text: str) -> str:
         page = self._require_page()
@@ -371,6 +400,7 @@ class PlaywrightBrowserServer:
                 "yet, may be behind a tab, or may be on another page. Read "
                 "browser_get_content before concluding it is absent."
             )
+        await self._settle_scroll(page)
         return f"Scrolled to {found!r}"
 
     async def _scroll_to_text_once(self, page: Page, text: str):
@@ -412,7 +442,9 @@ class PlaywrightBrowserServer:
               );
               const target = deepest[0];
               if (!target) return false;
-              target.scrollIntoView({block: 'center', inline: 'nearest'});
+              target.scrollIntoView({
+                block: 'center', inline: 'nearest', behavior: 'instant'
+              });
               return (target.innerText || '').trim() || target.id || wanted;
             }
             """,

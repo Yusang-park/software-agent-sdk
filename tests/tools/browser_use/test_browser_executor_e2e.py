@@ -116,7 +116,8 @@ SECTIONS_HTML = """<!DOCTYPE html>
 <head><title>Artist</title>
 <style>section { padding: 16px; margin: 16px 0; }
 .panel { border: 1px solid #ccc; border-radius: 8px; background: #fff; padding: 12px; margin: 16px 0; }
-header { position: fixed; top: 0; left: 0; right: 0; height: 60px; background: #fff; }</style>
+header { position: fixed; top: 0; left: 0; right: 0; height: 60px; background: #fff; }
+html { scroll-behavior: smooth; }</style>
 </head>
 <body><header><input placeholder="Search"></header><main style="padding-top: 70px">
     <div style="height: 100vh; background: #ddd">hero sized to the viewport</div>
@@ -139,7 +140,9 @@ header { position: fixed; top: 0; left: 0; right: 0; height: 60px; background: #
                 '<div id="noteworthy-frame" style="padding: 12px">' +
                 '<div class="panel" id="noteworthy-panel" style="background: rgb(200, 230, 255)">' +
                 '<section id="noteworthy">' +
-                '<h3>All Noteworthy Insights</h3><p>Spotify Followers Increased Growth</p>' +
+                '<div style="display: flex; gap: 8px; align-items: center">' +
+                '<h3>All Noteworthy Insights</h3><button>Range</button></div>' +
+                '<p>Spotify Followers Increased Growth</p>' +
                 '<div style="height: 300px; background: #eee"></div></section></div></div>';
         });
     </script>
@@ -324,6 +327,18 @@ class TestBrowserExecutorE2E:
         assert result.text.startswith("Scrolled to 'All Noteworthy Insights'"), (
             result.text[:120]
         )
+        # The page scrolls smoothly, like every Chartmetric page, and the
+        # state that comes back with the scroll is read once the page has
+        # stopped: the label sits at the centre of the viewport, not on its
+        # way there (79f2fa2b, 2026-09-11: 200px short).
+        state = json.loads(result.text[result.text.index("{") :])
+        button = next(
+            element
+            for element in state["interactive_elements"]
+            if element.get("text") == "Range" or element.get("name") == "Range"
+        )
+        viewport_height = state.get("viewport", {}).get("height") or 800
+        assert abs(button["y"] - viewport_height / 2) < 40, (button, viewport_height)
 
     def test_get_state_action(
         self, browser_executor: BrowserToolExecutor, test_server: str
