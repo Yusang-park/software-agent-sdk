@@ -840,66 +840,6 @@ class BrowserSetViewportTool(
 
 
 # ============================================
-# `browser_capture_element`
-# ============================================
-class BrowserCaptureElementAction(BrowserAction):
-    """Schema for capturing one section of the page as the picture."""
-
-    text: str = Field(
-        min_length=1,
-        max_length=200,
-        description=(
-            "Text the section shows -- its heading, a label in it -- or the "
-            "exact `id` from `semantic_outline`. The picture is of the section "
-            "that owns that text."
-        ),
-    )
-
-
-BROWSER_CAPTURE_ELEMENT_DESCRIPTION = """Capture one section of the page as the picture, by the text it shows.
-
-The frame is the element itself: the section that owns the text -- a card, a panel,
-an article, a list item -- scrolled into view and captured whole, even when it is
-taller than the viewport. A picture meant to show one section then shows that
-section and nothing else: not the card above it, not whatever the page had at the
-scroll position. Use it for evidence of a named section ("Noteworthy Insights",
-"Subscription Level Breakdown"); use browser_get_state for the page as a whole.
-
-Pass `text` the section's heading or a label it shows, or the exact `id` from
-`semantic_outline`. When nothing on the page shows the text, no picture is taken
-and the result says so: bring the section on screen first, or read browser_find.
-
-Parameters:
-- text: the heading, a label, or an outline `id` the section shows
-"""  # noqa: E501
-
-
-class BrowserCaptureElementTool(
-    _SharesOneBrowserSession,
-    ToolDefinition[BrowserCaptureElementAction, BrowserObservation],
-):
-    """Tool for capturing one section of the page as the picture."""
-
-    @classmethod
-    def create(cls, executor: "BrowserToolExecutor") -> Sequence[Self]:
-        return [
-            cls(
-                description=BROWSER_CAPTURE_ELEMENT_DESCRIPTION,
-                action_type=BrowserCaptureElementAction,
-                observation_type=BrowserObservation,
-                annotations=ToolAnnotations(
-                    title="browser_capture_element",
-                    readOnlyHint=True,
-                    destructiveHint=False,
-                    idempotentHint=True,
-                    openWorldHint=True,
-                ),
-                executor=executor,
-            )
-        ]
-
-
-# ============================================
 # `browser_go_back`
 # ============================================
 class BrowserGoBackAction(BrowserAction):
@@ -1580,7 +1520,6 @@ class BrowserToolSet(ToolDefinition[BrowserAction, BrowserObservation]):
             BrowserFillFormTool,
             BrowserScrollTool,
             BrowserSetViewportTool,
-            BrowserCaptureElementTool,
             BrowserGoBackTool,
             BrowserListTabsTool,
             BrowserSwitchTabTool,

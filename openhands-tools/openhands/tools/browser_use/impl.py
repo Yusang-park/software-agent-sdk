@@ -732,7 +732,6 @@ class BrowserToolExecutor(ToolExecutor[BrowserAction, BrowserObservation]):
     ):
         """Execute browser action asynchronously."""
         from openhands.tools.browser_use.definition import (
-            BrowserCaptureElementAction,
             BrowserClickAction,
             BrowserCloseTabAction,
             BrowserFillFormAction,
@@ -817,8 +816,6 @@ class BrowserToolExecutor(ToolExecutor[BrowserAction, BrowserObservation]):
                 result = await self.scroll(action.direction, action.to_text)
             elif isinstance(action, BrowserSetViewportAction):
                 result = await self.set_viewport(action.width, action.height)
-            elif isinstance(action, BrowserCaptureElementAction):
-                return await self.capture_element(action.text)
             elif isinstance(action, BrowserGoBackAction):
                 result = await self.go_back()
             elif isinstance(action, BrowserListTabsAction):
@@ -1033,33 +1030,6 @@ class BrowserToolExecutor(ToolExecutor[BrowserAction, BrowserObservation]):
         """Re-render the open page at another viewport size."""
         await self._ensure_initialized()
         return await self._server._set_viewport(width, height)
-
-    async def capture_element(self, text: str):
-        """A picture of the one section that shows `text`.
-
-        The observation's text is the page address, the section's own text
-        and where it sits; the picture is the section alone, whole, even when
-        it is taller than the viewport.
-        """
-        from openhands.tools.browser_use.definition import BrowserObservation
-
-        await self._ensure_initialized()
-        result_json = await self._server._capture_element(text)
-        try:
-            result_data = json.loads(result_json)
-        except (TypeError, ValueError):
-            return BrowserObservation.from_text(
-                text=str(result_json),
-                is_error=True,
-                full_output_save_dir=self.full_output_save_dir,
-            )
-        screenshot_data = result_data.pop("screenshot", None)
-        return BrowserObservation.from_text(
-            text=json.dumps(result_data, indent=2),
-            is_error=screenshot_data is None,
-            screenshot_data=screenshot_data,
-            full_output_save_dir=self.full_output_save_dir,
-        )
 
     async def _browser_state_payload(
         self, include_screenshot: bool

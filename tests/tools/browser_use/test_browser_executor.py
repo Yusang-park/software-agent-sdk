@@ -18,7 +18,6 @@ import pytest
 from openhands.sdk.tool.schema import TextContent
 from openhands.sdk.utils.async_executor import AsyncExecutor
 from openhands.tools.browser_use.definition import (
-    BrowserCaptureElementAction,
     BrowserClickAction,
     BrowserFillFormAction,
     BrowserFindAction,
@@ -600,60 +599,6 @@ async def test_set_viewport_returns_the_page_it_produced(
     )
     assert "Viewport set to 390x844" in text
     assert '"index": 3' in text
-
-
-async def test_capture_element_returns_the_section_as_the_picture(
-    mock_browser_executor,
-):
-    """The picture is the element screenshot the server took; the text is the
-    page address and the section's own words, without the picture bytes."""
-    mock_browser_executor._server._capture_element = AsyncMock(
-        return_value=json.dumps(
-            {
-                "url": "https://app.example/artist/4",
-                "title": "Bob Dylan",
-                "text": "All Noteworthy Insights Spotify Followers Increased",
-                "captured": {"tag": "section", "id": "", "box": {"y": 7843}},
-                "screenshot": "aGVsbG8=",
-            }
-        )
-    )
-
-    result = await mock_browser_executor._execute_action(
-        BrowserCaptureElementAction(text="Noteworthy Insights")
-    )
-
-    text = "".join(
-        block.text for block in result.content if isinstance(block, TextContent)
-    )
-    assert result.screenshot_data == "aGVsbG8="
-    assert result.is_error is False
-    assert '"url": "https://app.example/artist/4"' in text
-    assert "All Noteworthy Insights" in text and "screenshot" not in text
-    mock_browser_executor._server._capture_element.assert_awaited_once_with(
-        "Noteworthy Insights"
-    )
-
-
-async def test_capture_element_without_a_match_is_an_error_with_no_picture(
-    mock_browser_executor,
-):
-    mock_browser_executor._server._capture_element = AsyncMock(
-        return_value=json.dumps(
-            {
-                "url": "https://app.example/artist/4",
-                "captured": None,
-                "error": "No element on the page shows 'Playlists'",
-            }
-        )
-    )
-
-    result = await mock_browser_executor._execute_action(
-        BrowserCaptureElementAction(text="Playlists")
-    )
-
-    assert result.is_error is True
-    assert result.screenshot_data is None
 
 
 @patch("openhands.tools.browser_use.impl.BrowserToolExecutor.click")

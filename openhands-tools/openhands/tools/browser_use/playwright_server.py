@@ -13,7 +13,6 @@ from playwright.async_api import (
     BrowserContext,
     CDPSession,
     Error as PlaywrightError,
-    FloatRect,
     Locator,
     Page,
     Playwright,
@@ -126,178 +125,13 @@ _STATE_SCRIPT = r"""
 """
 
 
-# The element a capture is of: the section that owns the text the caller named.
-# Playwright's element screenshot is what kevin-slack-bot's `screenshot.py`
-# does with `locator.screenshot()`, and it is what makes a picture of one
-# section a picture of that section -- a viewport frame shows whatever the
-# page had at that scroll position, and on Pilot 007f2c76 (2026-09-10) that
-# was the lookalike card above the one the check named.
-_CAPTURE_TARGET_SCRIPT = r"""
-(wanted) => {
-  const rendered = (element) => {
-    if (element.getClientRects().length === 0) return false;
-    for (let node = element; node; node = node.parentElement) {
-      const style = getComputedStyle(node);
-      if (style.visibility === 'hidden' || style.display === 'none') return false;
-    }
-    return true;
-  };
-  const byId = document.getElementById(wanted);
-  let match = byId && rendered(byId) ? byId : null;
-  if (!match) {
-    const needle = wanted.toLowerCase();
-    const holders = Array.from(document.querySelectorAll('body *')).filter(
-      (element) => rendered(element)
-        && (element.innerText || '').toLowerCase().includes(needle)
-    );
-    // The deepest holders: those none of whose descendants also hold the
-    // text; among them the one whose own text is shortest -- the label
-    // itself rather than a paragraph that mentions it.
-    const deepest = holders.filter(
-      (element) => !holders.some(
-        (other) => other !== element && element.contains(other)
-      )
-    );
-    deepest.sort((a, b) => (a.innerText || '').length - (b.innerText || '').length);
-    match = deepest[0] || null;
-  }
-  if (!match) return null;
-  const SECTION = [
-    'section', 'article', 'aside', 'form', 'li', 'fieldset', 'table',
-    '[role="region"]', '[role="article"]', '[role="complementary"]',
-    '[role="group"]', '[role="dialog"]', '[data-testid]'
-  ].join(',');
-  const tooTall = Math.max(innerHeight * 3, 1200);
-  // Climb from the text to the section that owns it: the nearest ancestor
-  // that is a section-shaped element and not most of the page.
-  let node = match;
-  let chosen = null;
-  while (node && node !== document.body && node.tagName !== 'MAIN') {
-    const height = node.getBoundingClientRect().height;
-    if (height > tooTall) break;
-    if (node !== match && node.matches(SECTION) && height >= 40) {
-      chosen = node;
-      break;
-    }
-    node = node.parentElement;
-  }
-  if (!chosen) {
-    // No section-shaped ancestor: the tallest ancestor that still fits a
-    // few screens, so the picture is the block around the text and not a
-    // single line of it.
-    node = match;
-    chosen = match;
-    while (node && node !== document.body && node.tagName !== 'MAIN') {
-      if (node.getBoundingClientRect().height > tooTall) break;
-      chosen = node;
-      node = node.parentElement;
-    }
-  }
-  // The card around the section, when there is one: the nearest ancestor
-  // that paints itself -- a border, a shadow, a rounded corner, a background
-  // of its own -- and is not much bigger than the section. A section is
-  // usually the content of a panel, and a picture of the content alone
-  // shows none of the panel (Pilot 4625ca37, 2026-09-11: the Noteworthy
-  // Insights section came back without the card that frames it).
-  const paints = (element) => {
-    const style = getComputedStyle(element);
-    if (style.boxShadow && style.boxShadow !== 'none') return true;
-    if (parseFloat(style.borderTopWidth) > 0 || parseFloat(style.borderLeftWidth) > 0) {
-      return true;
-    }
-    if (parseFloat(style.borderTopLeftRadius) > 0) return true;
-    const background = style.backgroundColor;
-    if (!background || background === 'transparent') return false;
-    const parent = element.parentElement;
-    const parentBackground = parent ? getComputedStyle(parent).backgroundColor : '';
-    return background !== 'rgba(0, 0, 0, 0)' && background !== parentBackground;
-  };
-  const sectionHeight = chosen.getBoundingClientRect().height;
-  for (let node = chosen.parentElement; node && node !== document.body
-       && node.tagName !== 'MAIN'; node = node.parentElement) {
-    const height = node.getBoundingClientRect().height;
-    if (height > tooTall || height > sectionHeight * 1.6 + 240) break;
-    if (paints(node)) { chosen = node; break; }
-  }
-  // The frame around the card, when there is one: an ancestor that hugs the
-  // chosen element by no more than padding on every side. A page column, a
-  // grid cell or the content area is never that close, so it can never be
-  // picked; a wrapper holding the card plus a header or a sibling is bigger
-  // than the bound and is skipped, which is right -- it is not the frame.
-  const HUG = 48;
-  for (let level = 0; level < 3; level += 1) {
-    const parent = chosen.parentElement;
-    if (!parent || parent === document.body || parent.tagName === 'MAIN') break;
-    const inner = chosen.getBoundingClientRect();
-    const outer = parent.getBoundingClientRect();
-    const gaps = [inner.left - outer.left, outer.right - inner.right,
-                  inner.top - outer.top, outer.bottom - inner.bottom];
-    // Hugs: no side further than padding. Adds: at least one side further
-    // than the card itself, or the wrapper is the same box under another
-    // name and there is nothing to gain by taking it.
-    const hugs = gaps.every((gap) => gap <= HUG);
-    const adds = gaps.some((gap) => gap > 0.5);
-    if (!hugs || !adds) break;
-    chosen = parent;
-  }
-  // A section shorter than the viewport is centred, a taller one starts at
-  // the top; fixed and sticky elements over it are hidden for the picture
-  // by `_HIDE_OVERLAYS_SCRIPT`.
-  const fits = chosen.getBoundingClientRect().height < innerHeight;
-  chosen.scrollIntoView({block: fits ? 'center' : 'start', inline: 'nearest'});
-  return chosen;
-}
-"""
-
-# An element screenshot is the element's box *as painted*, so a fixed or sticky
-# element outside it -- a site header, a cookie bar -- lands inside the picture.
-# Scrolling the section to the top of the viewport puts its top edge exactly
-# under a fixed header: on Pilot cef12908 (2026-09-10) the Noteworthy Insights
-# section was photographed with the site's header over its title and date
-# range. Such elements are hidden for the capture and restored after it; one
-# inside the section, or one that contains it, is part of what was asked for.
-_HIDE_OVERLAYS_SCRIPT = r"""
-(target) => {
-  let hidden = 0;
-  for (const node of document.querySelectorAll('body *')) {
-    if (node.contains(target) || target.contains(node)) continue;
-    const position = getComputedStyle(node).position;
-    if (position !== 'fixed' && position !== 'sticky') continue;
-    node.dataset.ohCaptureVisibility = node.style.visibility;
-    node.style.visibility = 'hidden';
-    hidden += 1;
-  }
-  return hidden;
-}
-"""
-
-_RESTORE_OVERLAYS_SCRIPT = r"""
-() => {
-  for (const node of document.querySelectorAll('[data-oh-capture-visibility]')) {
-    node.style.visibility = node.dataset.ohCaptureVisibility;
-    delete node.dataset.ohCaptureVisibility;
-  }
-}
-"""
-
-
-# How long a capture waits for a section that is still mounting: four looks a
-# half second apart, two seconds in all.
-CAPTURE_ELEMENT_ATTEMPTS = 4
-CAPTURE_ELEMENT_RETRY_MS = 500
-# The page around the captured element, in CSS pixels on every side. An element
-# screenshot is clipped to the element's box, so a white card on a white
-# page reads as bare content -- its corners, shadow and margin are outside the
-# box (Pilot d5c378d9, 2026-09-11: the Noteworthy Insights panel came back as
-# text on white). A margin shows the card as a card.
-CAPTURE_ELEMENT_MARGIN_PX = 16
-# When nothing on the page shows the text, the page is walked to the bottom a
-# screen at a time so anything deferred mounts, looking again after each
-# step. On Pilot 4625ca37 (2026-09-11) three of four captures of a section
-# that mounts on scroll answered "no element shows", and the run spent
-# twenty calls scrolling and reading source between them.
-CAPTURE_ELEMENT_WALK_STEPS = 40
-CAPTURE_ELEMENT_WALK_SETTLE_MS = 250
+# When nothing on the page shows the text a scroll was asked for, the page is
+# walked to the bottom a screen at a time so anything deferred mounts, looking
+# again after each step. On Pilot 4625ca37 (2026-09-11) three of four looks
+# for a section that mounts on scroll answered "no element shows", and the
+# run spent twenty calls scrolling and reading source between them.
+SCROLL_TO_TEXT_WALK_STEPS = 40
+SCROLL_TO_TEXT_WALK_SETTLE_MS = 250
 _MOUNT_WALK_SCRIPT = """
 () => {
   scrollBy(0, Math.round(innerHeight * 0.9));
@@ -525,9 +359,9 @@ class PlaywrightBrowserServer:
         if not found:
             # Not on the page yet: walk it a screen at a time so a deferred
             # section mounts, and look again after each step.
-            for _ in range(CAPTURE_ELEMENT_WALK_STEPS):
+            for _ in range(SCROLL_TO_TEXT_WALK_STEPS):
                 at_bottom = await page.evaluate(_MOUNT_WALK_SCRIPT)
-                await page.wait_for_timeout(CAPTURE_ELEMENT_WALK_SETTLE_MS)
+                await page.wait_for_timeout(SCROLL_TO_TEXT_WALK_SETTLE_MS)
                 found = await self._scroll_to_text_once(page, text)
                 if found or at_bottom:
                     break
@@ -596,126 +430,6 @@ class PlaywrightBrowserServer:
         page = self._require_page()
         await page.set_viewport_size({"width": width, "height": height})
         return f"Viewport set to {width}x{height}"
-
-    async def capture_element(self, text: str) -> str:
-        """A picture of the one section that shows `text`, as JSON with the
-        page address, the section's own text, and the element screenshot."""
-        page = self._require_page()
-        element = None
-        # A section a scroll just brought into view may still be mounting:
-        # on Pilot cef12908 (2026-09-10) the capture ran nine seconds after
-        # the scroll, the section was on screen for the person watching, and
-        # the DOM had no "Noteworthy Insights" yet. A few short waits cover
-        # a mount without turning a real absence into a long stall.
-        for attempt in range(CAPTURE_ELEMENT_ATTEMPTS):
-            handle = await page.evaluate_handle(_CAPTURE_TARGET_SCRIPT, text)
-            element = handle.as_element()
-            if element is not None:
-                break
-            if attempt + 1 < CAPTURE_ELEMENT_ATTEMPTS:
-                await page.wait_for_timeout(CAPTURE_ELEMENT_RETRY_MS)
-        if element is None:
-            # Not on the page yet: walk it, so a deferred section mounts.
-            for _ in range(CAPTURE_ELEMENT_WALK_STEPS):
-                at_bottom = await page.evaluate(_MOUNT_WALK_SCRIPT)
-                await page.wait_for_timeout(CAPTURE_ELEMENT_WALK_SETTLE_MS)
-                handle = await page.evaluate_handle(_CAPTURE_TARGET_SCRIPT, text)
-                element = handle.as_element()
-                if element is not None or at_bottom:
-                    break
-        if element is None:
-            return json.dumps(
-                {
-                    "url": page.url,
-                    "title": await page.title(),
-                    "captured": None,
-                    "error": (
-                        f"No element on the page shows {text!r}, so nothing was "
-                        "captured. It may not have loaded yet, may be behind a "
-                        "tab, or may be on another page. Read browser_get_state "
-                        "or browser_find before concluding it is absent."
-                    ),
-                },
-                indent=2,
-            )
-        summary = await element.evaluate(
-            r"""(element) => ({
-              tag: element.tagName.toLowerCase(),
-              id: (element.id || '').slice(0, 120),
-              top: Math.round(element.getBoundingClientRect().top),
-              text: (element.innerText || '').trim()
-                .replace(/\s+/g, ' ').slice(0, 4000),
-            })"""
-        )
-        box = await element.bounding_box()
-        options: dict[str, Any] = {"type": "jpeg", "quality": 80}
-        if self._sensitive_values:
-            options["mask"] = await self._screenshot_masks(page)
-            options["mask_color"] = "#000000"
-        await element.evaluate(_HIDE_OVERLAYS_SCRIPT)
-        try:
-            if box:
-                # The element's box plus a margin, so the picture shows the
-                # card and the page around it. Taken from the viewport when
-                # it fits: a full-page capture re-lays the page out at its
-                # full height, and anything sized in `vh` moves everything
-                # below it -- on Pilot 83f7b5a0 (2026-09-11) the clip meant
-                # for the Noteworthy Insights card came back as the Event
-                # Analyzer section beneath it. Only a card taller than the
-                # viewport is taken from the full page, in document
-                # coordinates.
-                margin = CAPTURE_ELEMENT_MARGIN_PX
-                viewport = page.viewport_size or {"width": 0, "height": 0}
-                fits = (
-                    viewport["height"] > 0
-                    and box["height"] + 2 * margin <= viewport["height"]
-                )
-                clip: FloatRect
-                if fits:
-                    x = max(0.0, box["x"] - margin)
-                    y = max(0.0, box["y"] - margin)
-                    clip = {
-                        "x": x,
-                        "y": y,
-                        "width": min(box["width"] + 2 * margin, viewport["width"] - x),
-                        "height": min(
-                            box["height"] + 2 * margin, viewport["height"] - y
-                        ),
-                    }
-                    screenshot = await page.screenshot(clip=clip, **options)
-                else:
-                    scroll_x, scroll_y = await page.evaluate("() => [scrollX, scrollY]")
-                    clip = {
-                        "x": max(0.0, box["x"] + scroll_x - margin),
-                        "y": max(0.0, box["y"] + scroll_y - margin),
-                        "width": box["width"] + 2 * margin,
-                        "height": box["height"] + 2 * margin,
-                    }
-                    screenshot = await page.screenshot(
-                        full_page=True, clip=clip, **options
-                    )
-            else:
-                screenshot = await element.screenshot(**options)
-        finally:
-            await page.evaluate(_RESTORE_OVERLAYS_SCRIPT)
-        captured = dict(summary if isinstance(summary, dict) else {})
-        if box:
-            captured["box"] = {
-                "x": round(box["x"]),
-                "y": round(box["y"]),
-                "width": round(box["width"]),
-                "height": round(box["height"]),
-            }
-        return json.dumps(
-            {
-                "url": page.url,
-                "title": await page.title(),
-                "text": captured.pop("text", ""),
-                "captured": captured,
-                "screenshot": base64.b64encode(screenshot).decode(),
-            },
-            indent=2,
-        )
 
     async def get_storage(self) -> str:
         context = self._require_context()

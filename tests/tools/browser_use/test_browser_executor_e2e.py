@@ -12,7 +12,6 @@ from collections.abc import Generator
 import pytest
 
 from openhands.tools.browser_use.definition import (
-    BrowserCaptureElementAction,
     BrowserClickAction,
     BrowserCloseTabAction,
     BrowserFindAction,
@@ -309,65 +308,6 @@ class TestBrowserExecutorE2E:
         pixels = base64.b64decode(result.screenshot_data, validate=True)
         assert pixels.startswith((b"\x89PNG\r\n\x1a\n", b"\xff\xd8\xff"))
 
-    def test_capture_element_is_the_named_section_alone(
-        self, browser_executor: BrowserToolExecutor, test_server: str
-    ):
-        """The picture is the section that owns the text -- not the viewport,
-        not the taller lookalike card above it -- and the text beside it is
-        that section's own."""
-        browser_executor(BrowserNavigateAction(url=f"{test_server}/sections.html"))
-        time.sleep(0.3)
-
-        result = browser_executor(
-            BrowserCaptureElementAction(text="Noteworthy Insights")
-        )
-
-        assert isinstance(result, BrowserObservation)
-        assert not result.is_error, result.text
-        state = json.loads(result.text)
-        # The section is not in the DOM until the page has been scrolled past
-        # the overview; the capture walked there itself. And the picture is
-        # the painted panel around the section, not the section's content.
-        # ... and then the frame that hugs the panel by padding alone, never
-        # the host column around it, which is far wider than the panel.
-        assert state["captured"]["tag"] == "div"
-        assert state["captured"]["id"] == "noteworthy-frame"
-        # Centred: a section that fits the viewport is not parked under the
-        # fixed 60px search bar.
-        assert state["captured"]["top"] >= 60, state["captured"]
-        assert "All Noteworthy Insights" in state["text"]
-        assert "Artist Overview" not in state["text"]
-        assert result.screenshot_data
-        pixels = base64.b64decode(result.screenshot_data, validate=True)
-        assert pixels.startswith(b"\xff\xd8\xff")
-        height = _jpeg_height(pixels)
-        # The picture is the panel, not whatever sat at those coordinates
-        # after a full-page re-layout: its centre is the panel's colour.
-        from io import BytesIO
-
-        from PIL import Image
-
-        picture = Image.open(BytesIO(pixels)).convert("RGB")
-        # 16px margin + 12px frame padding puts the panel at (28, 28); past
-        # its 8px rounded corner and 1px border, (44, 44) is inside the panel's
-        # own padding: panel colour, not the grey block inside or the page.
-        pixel = picture.getpixel((44, 44))
-        assert isinstance(pixel, tuple)
-        red, green, blue = pixel[:3]
-        assert abs(red - 200) < 12 and abs(green - 230) < 12 and abs(blue - 255) < 12, (
-            red,
-            green,
-            blue,
-        )
-        # The section is about 420px tall; the viewport is 800 and the
-        # overview card above it over 1000.
-        assert 300 < height < 750, height
-
-        missing = browser_executor(BrowserCaptureElementAction(text="Playlists"))
-        assert missing.is_error
-        assert missing.screenshot_data is None
-        assert "No element on the page shows 'Playlists'" in missing.text
-
     def test_a_scroll_to_text_lands_on_the_label_not_its_outermost_ancestor(
         self, browser_executor: BrowserToolExecutor, test_server: str
     ):
@@ -384,19 +324,6 @@ class TestBrowserExecutorE2E:
         assert result.text.startswith("Scrolled to 'All Noteworthy Insights'"), (
             result.text[:120]
         )
-
-    def test_capture_element_waits_for_a_section_that_mounts_late(
-        self, browser_executor: BrowserToolExecutor, test_server: str
-    ):
-        browser_executor(BrowserNavigateAction(url=f"{test_server}/sections.html"))
-        # No sleep: the lazy section mounts 600ms after load, inside the
-        # capture's own waiting.
-        result = browser_executor(BrowserCaptureElementAction(text="Audience Summary"))
-
-        assert not result.is_error, result.text
-        state = json.loads(result.text)
-        assert state["captured"]["id"] == "lazy-host"
-        assert "Primary Market United States" in state["text"]
 
     def test_get_state_action(
         self, browser_executor: BrowserToolExecutor, test_server: str
