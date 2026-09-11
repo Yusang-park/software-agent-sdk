@@ -137,10 +137,11 @@ header { position: fixed; top: 0; left: 0; right: 0; height: 60px; background: #
             if (mounted || scrollY < 600) return;
             mounted = true;
             document.getElementById('noteworthy-host').innerHTML =
+                '<div id="noteworthy-frame" style="padding: 12px">' +
                 '<div class="panel" id="noteworthy-panel" style="background: rgb(200, 230, 255)">' +
                 '<section id="noteworthy">' +
                 '<h3>All Noteworthy Insights</h3><p>Spotify Followers Increased Growth</p>' +
-                '<div style="height: 300px; background: #eee"></div></section></div>';
+                '<div style="height: 300px; background: #eee"></div></section></div></div>';
         });
     </script>
     <section id="lazy-host"></section>
@@ -327,8 +328,10 @@ class TestBrowserExecutorE2E:
         # The section is not in the DOM until the page has been scrolled past
         # the overview; the capture walked there itself. And the picture is
         # the painted panel around the section, not the section's content.
+        # ... and then the frame that hugs the panel by padding alone, never
+        # the host column around it, which is far wider than the panel.
         assert state["captured"]["tag"] == "div"
-        assert state["captured"]["id"] == "noteworthy-panel"
+        assert state["captured"]["id"] == "noteworthy-frame"
         # Centred: a section that fits the viewport is not parked under the
         # fixed 60px search bar.
         assert state["captured"]["top"] >= 60, state["captured"]
@@ -345,9 +348,10 @@ class TestBrowserExecutorE2E:
         from PIL import Image
 
         picture = Image.open(BytesIO(pixels)).convert("RGB")
-        # 16px margin + 12px frame padding puts the panel's own padding at
-        # (28, 28); a few pixels in is panel colour, not the grey block inside.
-        pixel = picture.getpixel((32, 32))
+        # 16px margin + 12px frame padding puts the panel at (28, 28); past
+        # its 8px rounded corner and 1px border, (44, 44) is inside the panel's
+        # own padding: panel colour, not the grey block inside or the page.
+        pixel = picture.getpixel((44, 44))
         assert isinstance(pixel, tuple)
         red, green, blue = pixel[:3]
         assert abs(red - 200) < 12 and abs(green - 230) < 12 and abs(blue - 255) < 12, (
