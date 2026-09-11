@@ -560,8 +560,10 @@ async def test_a_click_returns_the_page_it_produced(mock_click, mock_browser_exe
         block.text for block in result.content if isinstance(block, TextContent)
     )
     assert "Click successful" in text
-    # The next index is available without a second round trip.
-    assert '"index": 7' in text
+    # The next index is available without a second round trip. Read as data,
+    # because how the state is spelled is the serializer's business.
+    state = json.loads(text[text.index("{") :])
+    assert state["interactive_elements"] == [{"index": 7, "text": "Next"}]
     assert result.screenshot_data == "cGl4ZWxz"
 
 
@@ -598,7 +600,8 @@ async def test_set_viewport_returns_the_page_it_produced(
         block.text for block in result.content if isinstance(block, TextContent)
     )
     assert "Viewport set to 390x844" in text
-    assert '"index": 3' in text
+    state = json.loads(text[text.index("{") :])
+    assert state["interactive_elements"] == [{"index": 3, "text": "Menu"}]
 
 
 @patch("openhands.tools.browser_use.impl.BrowserToolExecutor.click")

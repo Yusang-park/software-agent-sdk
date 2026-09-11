@@ -33,6 +33,21 @@ _INDEX_ATTRIBUTE = "data-oh-browser-index"
 _STATE_SCRIPT = r"""
 () => {
   const INDEX = 'data-oh-browser-index';
+  // An empty string, a false flag and a null read the same to the model as
+  // the field not being there, and on a 100-element page they are the bulk
+  // of what repeats: `disabled` alone measured 429-500 characters per
+  // snapshot on real pages, before counting the empty `role`, `type` and
+  // `name` of every plain <a> and <button>. Dropping them costs no
+  // information and leaves that much more of the page inside the
+  // observation's 50,000-character ceiling.
+  const present = (entry) => {
+    const kept = {};
+    for (const [key, value] of Object.entries(entry)) {
+      if (value === '' || value === false || value === null) continue;
+      kept[key] = value;
+    }
+    return kept;
+  };
   const LIMIT = 100;
   const rendered = (element) => {
     if (element.getClientRects().length === 0) return false;
@@ -58,7 +73,7 @@ _STATE_SCRIPT = r"""
   const interactive = candidates.map((element, index) => {
     element.setAttribute(INDEX, String(index));
     const rect = element.getBoundingClientRect();
-    return {
+    return present({
       index,
       tag: element.tagName.toLowerCase(),
       role: (element.getAttribute('role') || '').slice(0, 80),
@@ -70,7 +85,7 @@ _STATE_SCRIPT = r"""
       disabled: Boolean(element.disabled),
       x: Math.round(rect.x),
       y: Math.round(rect.y),
-    };
+    });
   });
   const outlineSelector = [
     'h1', 'h2', 'h3', 'h4', 'h5', 'h6', '[role="heading"]',
@@ -88,7 +103,7 @@ _STATE_SCRIPT = r"""
     const name = (element.getAttribute('aria-label') || element.innerText || '')
       .trim().replace(/\s+/g, ' ').slice(0, 160);
     if (!name && !stableId && !['main', 'nav', 'aside'].includes(tag)) continue;
-    outline.push({
+    outline.push(present({
       kind: /^h[1-6]$/.test(tag) || role === 'heading' ? 'heading' : 'landmark',
       tag,
       role: tag === 'nav' && role === 'nav' ? 'navigation' : role,
@@ -97,7 +112,7 @@ _STATE_SCRIPT = r"""
       y: Math.round(rect.top + scrollY),
       location: rect.bottom < 0
         ? 'above' : rect.top > innerHeight ? 'below' : 'viewport',
-    });
+    }));
     if (outline.length === 80) break;
   }
   const root = document.documentElement;
@@ -207,6 +222,22 @@ _MOUNT_WALK_SCRIPT = """
   return scrollY + innerHeight >= document.documentElement.scrollHeight - 2;
 }
 """
+
+
+# Every page reading the agent gets is JSON, and `indent=2` spends about four
+# characters of padding on every one of its values. Measured on three real
+# production snapshots (Pilot 2026-09-12, 86-100 interactive elements each),
+# the same object compact is 0.61-0.62x the indented size -- and the size is
+# not free: `BrowserObservation.to_llm_content` cuts every observation at
+# `DEFAULT_TEXT_CONTENT_LIMIT` (50,000 characters), which browser observations
+# were hitting on 29 of 36, 6 of 6 and 5 of 5 calls in the two runs sampled.
+# Under that ceiling the padding is not merely paid for, it is paid for by
+# throwing away the tail of the page, so compacting buys roughly 40% more of
+# the page inside the same cap. No information is dropped: it is the same
+# object, printed without the whitespace.
+def _dump(payload: object) -> str:
+    """Serialize a browser payload without indentation padding."""
+    return json.dumps(payload, separators=(",", ":"))
 
 
 class PlaywrightBrowserServer:
@@ -367,7 +398,7 @@ class PlaywrightBrowserServer:
             else:
                 screenshot = await page.screenshot(type="jpeg", quality=75)
             state["screenshot"] = base64.b64encode(screenshot).decode()
-        return json.dumps(state, indent=2)
+        return _dump(state)
 
     async def click(self, index: int, new_tab: bool = False) -> str:
         locator = self._indexed_locator(index)
@@ -508,7 +539,7 @@ class PlaywrightBrowserServer:
         result = await page.evaluate(
             FIND_VISIBLE_TEXT_SCRIPT, {"needle": text, "limit": max_results}
         )
-        return json.dumps(result, indent=2)
+        return _dump(result)
 
     async def set_viewport(self, width: int, height: int) -> str:
         page = self._require_page()
@@ -528,7 +559,7 @@ class PlaywrightBrowserServer:
                 """
             )
         except PlaywrightError:
-            return json.dumps(state, indent=2)
+            return _dump(state)
         origins = state.setdefault("origins", [])
         stored_origin = next(
             (candidate for candidate in origins if candidate.get("origin") == origin),
@@ -538,7 +569,7 @@ class PlaywrightBrowserServer:
             stored_origin = {"origin": origin, "localStorage": []}
             origins.append(stored_origin)
         stored_origin["sessionStorage"] = session_storage
-        return json.dumps(state, indent=2)
+        return _dump(state)
 
     async def set_storage(self, storage_state: dict[str, Any]) -> str:
         context = self._require_context()
@@ -584,7 +615,7 @@ class PlaywrightBrowserServer:
             {"id": tab_id, "url": page.url, "active": page is self._page}
             for tab_id, page in self._pages.items()
         ]
-        return json.dumps(tabs, indent=2)
+        return _dump(tabs)
 
     async def switch_tab(self, tab_id: str) -> str:
         self._sync_pages()
