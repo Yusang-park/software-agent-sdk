@@ -467,3 +467,82 @@ async def test_typing_secret_registers_it_for_later_captures(playwright_runtime)
     server._page = page
     await server.type_text(0, "registered-secret", secret=True)
     assert "registered-secret" not in await server.get_browser_state()
+
+
+@pytest.mark.asyncio
+async def test_a_page_reading_spends_no_characters_on_padding(playwright_runtime):
+    """The state the agent reads is compact JSON, not an indented document.
+
+    Every browser observation is cut at 50,000 characters before it reaches the
+    model, so indentation is not merely paid for -- it is paid for by dropping
+    the tail of the page. The same object compact measured 0.61-0.62x its
+    indented size on real production snapshots.
+    """
+    starter, _, _, _, page = playwright_runtime
+    page.evaluate.return_value = {
+        "url": "http://127.0.0.1:3000/dashboard",
+        "title": "Dashboard",
+        "tabs": [],
+        "interactive_elements": [
+            {"index": index, "tag": "button", "text": f"Row {index}"}
+            for index in range(40)
+        ],
+        "viewport": {"width": 1280, "height": 800},
+        "page": {"width": 1280, "height": 1600},
+        "scroll": {"x": 0, "y": 0},
+        "pages_above": 0,
+        "pages_below": 1,
+        "semantic_outline": {"items": [], "total": 0, "truncated": False},
+    }
+    server = PlaywrightBrowserServer()
+
+    with patch(
+        "openhands.tools.browser_use.playwright_server.async_playwright",
+        return_value=starter,
+    ):
+        await server.start(headless=True, executable_path="/usr/bin/chromium")
+        serialized = await server.get_browser_state(include_screenshot=False)
+
+    # The page survives the compaction intact; only the whitespace is gone.
+    assert json.loads(serialized) == page.evaluate.return_value
+    assert "\n" not in serialized
+    assert len(serialized) < 0.7 * len(json.dumps(page.evaluate.return_value, indent=2))
+
+
+@pytest.mark.asyncio
+async def test_a_plain_control_carries_no_empty_or_false_fields():
+    """An element's absent attributes are absent from its reading.
+
+    A plain <button> has no role, no type and no aria-label, and is not
+    disabled; spelling all four out repeats about 40 characters per element on
+    a page that may carry 100 of them, and the model reads a missing field and
+    an empty one the same way.
+    """
+    executable = BrowserToolExecutor.check_chromium_available()
+    if executable is None:
+        pytest.skip("Chromium is not installed")
+    server = PlaywrightBrowserServer()
+    try:
+        await server.start(headless=True, executable_path=executable)
+        page = await server.get_current_page()
+        await page.set_content(
+            '<button>Save</button><input type="text" aria-label="Search" disabled>'
+        )
+
+        serialized = await server.get_browser_state(include_screenshot=False)
+        elements = json.loads(serialized)["interactive_elements"]
+
+        plain = next(item for item in elements if item.get("text") == "Save")
+        assert "disabled" not in plain
+        assert "role" not in plain
+        assert "type" not in plain
+        assert "name" not in plain
+        # index 0 is a value, not an absence, and has to survive the same pass.
+        assert plain["index"] == 0
+
+        # What is actually set still comes through.
+        search = next(item for item in elements if item.get("name") == "Search")
+        assert search["disabled"] is True
+        assert search["type"] == "text"
+    finally:
+        await server.close()

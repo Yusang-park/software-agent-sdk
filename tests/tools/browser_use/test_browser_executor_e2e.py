@@ -383,7 +383,7 @@ class TestBrowserExecutorE2E:
             for item in outline
         )
         assert any(
-            item["id"] == "lazy-insights" and item["name"] == "lazy-insights"
+            item.get("id") == "lazy-insights" and item["name"] == "lazy-insights"
             for item in outline
         )
         assert all(item["name"] != "Hidden Section" for item in outline)

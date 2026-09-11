@@ -1046,7 +1046,7 @@ class BrowserToolExecutor(ToolExecutor[BrowserAction, BrowserObservation]):
             try:
                 result_data = json.loads(result_json)
                 screenshot_data = result_data.pop("screenshot", None)
-                return json.dumps(result_data, indent=2), screenshot_data
+                return json.dumps(result_data, separators=(",", ":")), screenshot_data
             except json.JSONDecodeError:
                 # Unparseable state is still state; return it as it came.
                 pass
