@@ -251,8 +251,10 @@ async def test_scroll_to_text_is_one_dom_operation_then_a_settled_read(
     taken while `scroll-behavior: smooth` was still moving the page, and the
     section came out 200px below where it was sent."""
     starter, _, _, _, page = playwright_runtime
+    # The finder, then centre-offset/page-height readings: one that still
+    # moved (the page grew above the target), one that rests at the centre.
     page.evaluate = AsyncMock(
-        side_effect=["Noteworthy Insights", [0, 900], [0, 1180], [0, 1180]]
+        side_effect=["Noteworthy Insights", [300, 5000], [0, 5400], [0, 5400]]
     )
     page.wait_for_timeout = AsyncMock()
     server = PlaywrightBrowserServer()
@@ -268,9 +270,11 @@ async def test_scroll_to_text_is_one_dom_operation_then_a_settled_read(
     assert scroll_call.args[1] == "Noteworthy Insights"
     assert "block: 'center'" in scroll_call.args[0]
     assert "behavior: 'instant'" in scroll_call.args[0]
-    # Three position reads: the first, one that still moved, one that held.
+    # Three re-centring reads: 300px off, at the centre while the page still
+    # grew, at the centre with the height unchanged.
     assert page.evaluate.await_count == 4
     assert page.wait_for_timeout.await_count == 2
+    assert "behavior: 'instant'" in page.evaluate.await_args_list[-1].args[0]
     assert result == "Scrolled to 'Noteworthy Insights'"
 
 

@@ -491,6 +491,10 @@ class TestScrollingToSomethingRatherThanTowardsIt:
                 if arg is None:
                     # The mount walk, not the target lookup: never found here.
                     return False
+                if "scrollHeight" in script:
+                    # The re-centring read after the scroll: at the centre,
+                    # on a page that has stopped growing.
+                    return [0, 1000]
                 seen["script"], seen["arg"] = script, arg
                 return evaluate_result
 
