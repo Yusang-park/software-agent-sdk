@@ -127,13 +127,23 @@ html { scroll-behavior: smooth; }</style>
         <p>Bob Dylan is a legendary artist from the United States.</p>
         <div style="height: 900px"></div>
     </section></div>
+    <div id="above-host"></div>
     <div id="noteworthy-host"></div>
     <div class="panel"><section id="milestones"><h2>Top Recent Milestones</h2><div style="height: 600px"></div></section></div>
     <script>
         // The Noteworthy panel mounts only once the page has been scrolled
-        // past the overview, the way a deferred section does.
+        // past the overview, the way a deferred section does. And a panel
+        // *above* it mounts on the jump to it, the way the artist page's
+        // sections mount when scrolled past: the target then moves down by
+        // the panel's height while the scroll position stays.
         let mounted = false;
+        let aboveMounted = false;
         addEventListener('scroll', () => {
+            if (!aboveMounted && scrollY >= 1500) {
+                aboveMounted = true;
+                document.getElementById('above-host').innerHTML =
+                    '<div class="panel" style="height: 400px">Audience Summary mounted late</div>';
+            }
             if (mounted || scrollY < 600) return;
             mounted = true;
             document.getElementById('noteworthy-host').innerHTML =
@@ -327,10 +337,12 @@ class TestBrowserExecutorE2E:
         assert result.text.startswith("Scrolled to 'All Noteworthy Insights'"), (
             result.text[:120]
         )
-        # The page scrolls smoothly, like every Chartmetric page, and the
+        # The page scrolls smoothly, like every Chartmetric page, and a panel
+        # above the section mounts on the jump, like the artist page's; the
         # state that comes back with the scroll is read once the page has
-        # stopped: the label sits at the centre of the viewport, not on its
-        # way there (79f2fa2b, 2026-09-11: 200px short).
+        # stopped growing and the label sits at the centre of the viewport --
+        # not on its way there (79f2fa2b, 2026-09-11: 200px short) and not
+        # pushed down by what mounted above it (1ab57f9a, the same day).
         state = json.loads(result.text[result.text.index("{") :])
         button = next(
             element

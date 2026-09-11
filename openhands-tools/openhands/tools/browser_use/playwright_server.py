@@ -143,6 +143,63 @@ SCROLL_TO_TEXT_WALK_SETTLE_MS = 250
 SCROLL_SETTLE_POLL_MS = 50
 SCROLL_SETTLE_MAX_MS = 1000
 _SCROLL_POSITION_SCRIPT = "() => [scrollX, scrollY]"
+# How far from the viewport's centre the scrolled-to element may rest.
+SCROLL_CENTRE_TOLERANCE_PX = 4
+
+# The element that shows `wanted`: the deepest holder of the text, and among
+# those the one whose own text is shortest -- the label itself, not a paragraph
+# that mentions it and not the page's outermost container, which also "shows"
+# it (cef12908, 2026-09-10: `to_text` jumped to the top of the page).
+_FIND_TEXT_TARGET_JS = """
+  const exactId = document.getElementById(wanted);
+  const rendered = (element) => {
+    if (element.getClientRects().length === 0) return false;
+    for (let node = element; node; node = node.parentElement) {
+      const style = getComputedStyle(node);
+      if (style.visibility === 'hidden' || style.display === 'none') {
+        return false;
+      }
+    }
+    return true;
+  };
+  const needle = wanted.toLowerCase();
+  const holders = exactId ? [exactId] : Array.from(
+    document.querySelectorAll('body *')
+  ).filter((element) =>
+    rendered(element)
+    && (element.innerText || '').toLowerCase().includes(needle)
+  );
+  const deepest = holders.filter(
+    (element) => !holders.some(
+      (other) => other !== element && element.contains(other)
+    )
+  );
+  deepest.sort((a, b) =>
+    (a.innerText || '').length - (b.innerText || '').length
+  );
+  const target = deepest[0];
+"""
+
+# Scroll the target to the centre and report where it rests: its offset from
+# the viewport's centre, and the document's height. A page that mounts sections
+# lazily grows *above* the target after the jump -- on Chartmetric's artist
+# page the panels above mount when scrolled past, so a section sent to the
+# centre from the top of the page rested 180-390px low (79f2fa2b, 1ab57f9a,
+# 2026-09-11) while the same scroll from nearby landed centred (30463b33).
+# Called until the offset is inside tolerance and the height has stopped moving.
+_RECENTRE_TEXT_TARGET_SCRIPT = (
+    "(wanted) => {"
+    + _FIND_TEXT_TARGET_JS
+    + """
+  if (!target) return null;
+  target.scrollIntoView({block: 'center', inline: 'nearest', behavior: 'instant'});
+  const rect = target.getBoundingClientRect();
+  return [
+    Math.round(rect.top + rect.height / 2 - innerHeight / 2),
+    document.documentElement.scrollHeight,
+  ];
+}"""
+)
 
 _MOUNT_WALK_SCRIPT = """
 () => {
@@ -400,56 +457,51 @@ class PlaywrightBrowserServer:
                 "yet, may be behind a tab, or may be on another page. Read "
                 "browser_get_content before concluding it is absent."
             )
-        await self._settle_scroll(page)
+        await self._hold_target_at_centre(page, text)
         return f"Scrolled to {found!r}"
 
     async def _scroll_to_text_once(self, page: Page, text: str):
         return await page.evaluate(
-            """
-            (wanted) => {
-              const exactId = document.getElementById(wanted);
-              const rendered = (element) => {
-                if (element.getClientRects().length === 0) return false;
-                for (let node = element; node; node = node.parentElement) {
-                  const style = getComputedStyle(node);
-                  if (style.visibility === 'hidden' || style.display === 'none') {
-                    return false;
-                  }
-                }
-                return true;
-              };
-              const needle = wanted.toLowerCase();
-              const holders = exactId ? [exactId] : Array.from(
-                document.querySelectorAll('body *')
-              ).filter((element) =>
-                rendered(element)
-                && (element.innerText || '').toLowerCase().includes(needle)
-              );
-              // Every ancestor of the element that shows the text also
-              // "shows" it, and document order lists ancestors first -- so
-              // the first match used to be the page's outermost container,
-              // and scrolling to it jumped to the top of the page. The
-              // target is the deepest holder, and among those the one whose
-              // own text is shortest: the label itself, not a paragraph that
-              // happens to mention it.
-              const deepest = holders.filter(
-                (element) => !holders.some(
-                  (other) => other !== element && element.contains(other)
-                )
-              );
-              deepest.sort((a, b) =>
-                (a.innerText || '').length - (b.innerText || '').length
-              );
-              const target = deepest[0];
+            "(wanted) => {"
+            + _FIND_TEXT_TARGET_JS
+            + """
               if (!target) return false;
               target.scrollIntoView({
                 block: 'center', inline: 'nearest', behavior: 'instant'
               });
               return (target.innerText || '').trim() || target.id || wanted;
-            }
-            """,
+            }""",
             text,
         )
+
+    async def _hold_target_at_centre(self, page: Page, text: str) -> None:
+        """Re-centre the target until it rests there and the page stops growing.
+
+        One instant scroll is not the end of a scroll on a page that mounts
+        content on scroll: the jump fires the scroll handlers, sections above
+        the target mount, and the target moves down by their height while the
+        scroll position stays. So the target is sent to the centre again after
+        every poll until it is within tolerance and the document height has
+        held still for one poll, bounded by the same budget the settle uses.
+        """
+        previous: list | None = None
+        waited = 0
+        while True:
+            reading = await page.evaluate(_RECENTRE_TEXT_TARGET_SCRIPT, text)
+            if reading is None:
+                return
+            offset, height = reading
+            if (
+                previous is not None
+                and abs(offset) <= SCROLL_CENTRE_TOLERANCE_PX
+                and height == previous[1]
+            ):
+                return
+            if waited >= SCROLL_SETTLE_MAX_MS:
+                return
+            previous = reading
+            await page.wait_for_timeout(SCROLL_SETTLE_POLL_MS)
+            waited += SCROLL_SETTLE_POLL_MS
 
     async def find_visible_text(self, text: str, max_results: int = 10) -> str:
         page = self._require_page()
