@@ -348,17 +348,23 @@ class TestBrowserExecutorE2E:
         from PIL import Image
 
         picture = Image.open(BytesIO(pixels)).convert("RGB")
-        # 16px margin + 12px frame padding puts the panel at (28, 28); past
-        # its 8px rounded corner and 1px border, (44, 44) is inside the panel's
-        # own padding: panel colour, not the grey block inside or the page.
-        pixel = picture.getpixel((44, 44))
-        assert isinstance(pixel, tuple)
-        red, green, blue = pixel[:3]
-        assert abs(red - 200) < 12 and abs(green - 230) < 12 and abs(blue - 255) < 12, (
-            red,
-            green,
-            blue,
-        )
+        # The margin comes first: the top rows are page, not panel. Then,
+        # somewhere in the first hundred rows down the middle (past the
+        # frame's padding and the panel's own margin and border), the
+        # panel's colour -- which is what a clip taken at the wrong place
+        # never shows.
+        column = picture.width // 2
+
+        def rgb(y: int) -> tuple[int, int, int]:
+            pixel = picture.getpixel((column, y))
+            assert isinstance(pixel, tuple)
+            return pixel[0], pixel[1], pixel[2]
+
+        assert min(rgb(6)) > 240, rgb(6)
+        assert any(
+            abs(r - 200) < 12 and abs(g - 230) < 12 and abs(b - 255) < 12
+            for r, g, b in (rgb(y) for y in range(20, 100))
+        ), [rgb(y) for y in range(20, 100, 8)]
         # The section is about 420px tall; the viewport is 800 and the
         # overview card above it over 1000.
         assert 300 < height < 750, height
