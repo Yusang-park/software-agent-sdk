@@ -45,6 +45,7 @@ VALID_TARGETS = {
     "source",
     "source-minimal",
     "base-image-minimal",
+    "base-image-desktop",
     "base-image",
     "builder",
 }
@@ -812,7 +813,11 @@ def build_with_telemetry(opts: BuildOptions) -> BuildResult:
     build_context_started = time.monotonic()
     # Base-image targets don't need SDK source (no COPY from build context),
     # so use an empty temp dir instead of running the expensive uv build --sdist.
-    is_base_only = opts.target in ("base-image-minimal", "base-image")
+    is_base_only = opts.target in (
+        "base-image-minimal",
+        "base-image-desktop",
+        "base-image",
+    )
     if is_base_only:
         ctx = Path(tempfile.mkdtemp(prefix="agent-base-ctx-"))
         shutil.copy2(dockerfile_path, ctx / "Dockerfile")

@@ -1,28 +1,35 @@
-"""Tests for desktop service."""
+"""Tests for the KasmVNC desktop service."""
 
 import asyncio
 import os
 from unittest.mock import AsyncMock, MagicMock, patch
+from urllib.parse import parse_qs, urlsplit
 
 import pytest
 
-from openhands.agent_server.desktop_service import DesktopService, get_desktop_service
+from openhands.agent_server.desktop_service import (
+    KASMVNC_PROXY_PASSWORD,
+    KASMVNC_USERNAME,
+    DesktopService,
+    get_desktop_service,
+)
+
+
+def completed(returncode: int = 0, stderr: str = "") -> MagicMock:
+    result = MagicMock()
+    result.returncode = returncode
+    result.stderr = stderr
+    return result
 
 
 class TestDesktopService:
-    """Test cases for DesktopService."""
-
-    def test_desktop_service_initialization(self):
-        """Test desktop service initialization."""
+    def test_initialization_uses_the_existing_desktop_port_contract(self):
         service = DesktopService()
-        assert service._proc is None
         assert service.novnc_port == int(os.getenv("NOVNC_PORT", "8002"))
 
-    def test_desktop_service_custom_port(self):
-        """Test desktop service with custom port."""
+    def test_custom_desktop_port(self):
         with patch.dict(os.environ, {"NOVNC_PORT": "9999"}):
-            service = DesktopService()
-            assert service.novnc_port == 9999
+            assert DesktopService().novnc_port == 9999
 
     @pytest.mark.asyncio
     async def test_navigate_uses_shared_browser_executor(self):
@@ -36,438 +43,236 @@ class TestDesktopService:
                 return_value=executor,
             ),
         ):
-            result = await service.navigate("https://www.google.com")
+            assert await service.navigate("https://www.google.com") is True
 
-        assert result is True
-        action = executor.call_args.args[0]
-        assert action.url == "https://www.google.com"
+        assert executor.call_args.args[0].url == "https://www.google.com"
 
     @pytest.mark.asyncio
-    async def test_start_desktop_already_running(self):
-        """Test starting desktop when it's already running."""
+    async def test_start_returns_when_kasmvnc_is_already_running(self):
         service = DesktopService()
-
-        with patch.object(service, "is_running", return_value=True):
-            result = await service.start()
-            assert result is True
+        with (
+            patch.object(service, "is_running", return_value=True),
+            patch("subprocess.run") as run_mock,
+        ):
+            assert await service.start() is True
+        run_mock.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_start_desktop_directory_creation_failure(self):
-        """Test starting desktop when directory creation fails."""
+    async def test_start_fails_when_desktop_directories_cannot_be_created(self):
         service = DesktopService()
-
         with (
             patch.object(service, "is_running", return_value=False),
-            patch("pathlib.Path.mkdir", side_effect=Exception("Permission denied")),
+            patch("pathlib.Path.mkdir", side_effect=OSError("denied")),
         ):
-            result = await service.start()
-            assert result is False
+            assert await service.start() is False
 
     @pytest.mark.asyncio
-    async def test_start_desktop_xstartup_creation_failure(self):
-        """Test starting desktop when xstartup creation fails."""
+    async def test_start_fails_when_xstartup_cannot_be_written(self):
         service = DesktopService()
-
         with (
             patch.object(service, "is_running", return_value=False),
             patch("pathlib.Path.mkdir"),
             patch("pathlib.Path.exists", return_value=False),
-            patch("pathlib.Path.write_text", side_effect=Exception("Write failed")),
+            patch("pathlib.Path.write_text", side_effect=OSError("denied")),
         ):
-            result = await service.start()
-            assert result is False
+            assert await service.start() is False
 
     @pytest.mark.asyncio
-    async def test_start_desktop_vncserver_failure(self):
-        """Test starting desktop when vncserver fails."""
+    async def test_start_fails_when_kasmvnc_user_cannot_be_configured(self):
         service = DesktopService()
-
-        mock_result = MagicMock()
-        mock_result.returncode = 1
-
         with (
             patch.object(service, "is_running", return_value=False),
             patch("pathlib.Path.mkdir"),
             patch("pathlib.Path.exists", return_value=True),
-            patch("subprocess.run", return_value=mock_result),
+            patch("subprocess.run", return_value=completed(1, "bad password")),
         ):
-            result = await service.start()
-            assert result is False
+            assert await service.start() is False
 
     @pytest.mark.asyncio
-    async def test_start_desktop_novnc_proxy_not_found(self):
-        """Test starting desktop when noVNC proxy is not found."""
+    async def test_start_fails_when_kasmvnc_server_fails(self):
         service = DesktopService()
-
-        mock_xvnc_result = MagicMock()
-        mock_xvnc_result.returncode = 1  # Xvnc not running
-
-        mock_vncserver_result = MagicMock()
-        mock_vncserver_result.returncode = 0  # vncserver success
-
-        mock_novnc_result = MagicMock()
-        mock_novnc_result.returncode = 1  # noVNC not running
-
-        def mock_exists(self):
-            path_str = str(self)
-            return path_str.endswith("xstartup") and not path_str.endswith(
-                "novnc_proxy"
-            )
-
-        with (
-            patch.object(service, "is_running", return_value=False),
-            patch("pathlib.Path.mkdir"),
-            patch("pathlib.Path.exists", mock_exists),
-            patch(
-                "subprocess.run",
-                side_effect=[
-                    mock_xvnc_result,
-                    mock_vncserver_result,
-                    mock_novnc_result,
-                ],
-            ),
-        ):
-            result = await service.start()
-            assert result is False
-
-    @pytest.mark.asyncio
-    async def test_start_desktop_success_with_existing_novnc(self):
-        """Test starting desktop successfully with existing noVNC."""
-        service = DesktopService()
-
-        mock_xvnc_result = MagicMock()
-        mock_xvnc_result.returncode = 1  # Xvnc not running
-
-        mock_vncserver_result = MagicMock()
-        mock_vncserver_result.returncode = 0  # vncserver success
-
-        mock_novnc_result = MagicMock()
-        mock_novnc_result.returncode = 0  # noVNC already running
-
-        with (
-            patch.object(service, "is_running", return_value=True),
-            patch("pathlib.Path.mkdir"),
-            patch("pathlib.Path.exists", return_value=True),
-            patch(
-                "subprocess.run",
-                side_effect=[
-                    mock_xvnc_result,
-                    mock_vncserver_result,
-                    mock_novnc_result,
-                ],
-            ),
-            patch("asyncio.sleep"),
-        ):
-            result = await service.start()
-            assert result is True
-            assert service._proc is None  # We didn't start noVNC ourselves
-
-    @pytest.mark.asyncio
-    async def test_start_desktop_success_with_new_novnc(self):
-        """Test starting desktop successfully with new noVNC process."""
-        service = DesktopService()
-
-        mock_xvnc_result = MagicMock()
-        mock_xvnc_result.returncode = 1  # Xvnc not running
-
-        mock_vncserver_result = MagicMock()
-        mock_vncserver_result.returncode = 0  # vncserver success
-
-        mock_novnc_result = MagicMock()
-        mock_novnc_result.returncode = 1  # noVNC not running
-
-        mock_proc = MagicMock()
-        mock_proc.returncode = None
-
-        with (
-            patch.object(
-                service, "is_running", side_effect=[False, False, True]
-            ),  # Not running initially, then running after start
-            patch("pathlib.Path.mkdir"),
-            patch("pathlib.Path.exists", return_value=True),
-            patch(
-                "subprocess.run",
-                side_effect=[
-                    mock_xvnc_result,
-                    mock_vncserver_result,
-                    mock_novnc_result,
-                ],
-            ),
-            patch("asyncio.create_subprocess_exec", return_value=mock_proc),
-            patch("asyncio.sleep"),
-        ):
-            result = await service.start()
-            assert result is True
-            assert service._proc is mock_proc
-
-    @pytest.mark.asyncio
-    async def test_start_desktop_novnc_creation_failure(self):
-        """Test starting desktop when noVNC process creation fails."""
-        service = DesktopService()
-
-        mock_xvnc_result = MagicMock()
-        mock_xvnc_result.returncode = 1  # Xvnc not running
-
-        mock_vncserver_result = MagicMock()
-        mock_vncserver_result.returncode = 0  # vncserver success
-
-        mock_novnc_result = MagicMock()
-        mock_novnc_result.returncode = 1  # noVNC not running
-
         with (
             patch.object(service, "is_running", return_value=False),
             patch("pathlib.Path.mkdir"),
             patch("pathlib.Path.exists", return_value=True),
             patch(
                 "subprocess.run",
-                side_effect=[
-                    mock_xvnc_result,
-                    mock_vncserver_result,
-                    mock_novnc_result,
-                ],
-            ),
-            patch(
-                "asyncio.create_subprocess_exec",
-                side_effect=Exception("Failed to start"),
+                side_effect=[completed(), completed(1, "server failed")],
             ),
         ):
-            result = await service.start()
-            assert result is False
+            assert await service.start() is False
 
     @pytest.mark.asyncio
-    async def test_start_offloads_blocking_calls_to_thread(self):
-        """start() is async, so its synchronous subprocess.run / is_running
-        calls must be dispatched via asyncio.to_thread; otherwise they block the
-        event loop (the managed noVNC process already uses
-        await create_subprocess_exec). Regression guard for that inconsistency.
-        """
+    async def test_start_uses_integrated_kasmvnc_web_server(self):
         service = DesktopService()
-
-        mock_xvnc = MagicMock()
-        mock_xvnc.returncode = 1  # Xvnc not running -> start vncserver
-        mock_vncserver = MagicMock()
-        mock_vncserver.returncode = 0  # vncserver ok
-        mock_novnc = MagicMock()
-        mock_novnc.returncode = 0  # noVNC already running -> no create_subprocess_exec
-
-        real_to_thread = asyncio.to_thread
         with (
-            # False at entry (proceed), True at the final health check (success)
             patch.object(service, "is_running", side_effect=[False, True]),
             patch("pathlib.Path.mkdir"),
             patch("pathlib.Path.exists", return_value=True),
-            patch(
-                "subprocess.run",
-                side_effect=[mock_xvnc, mock_vncserver, mock_novnc],
-            ) as run_mock,
+            patch("subprocess.run", side_effect=[completed(), completed()]) as run_mock,
+            patch("asyncio.create_subprocess_exec") as create_process,
+            patch("asyncio.sleep"),
+        ):
+            assert await service.start() is True
+
+        password_call, launch_call = run_mock.call_args_list
+        assert password_call.args[0][:4] == [
+            "vncpasswd",
+            "-u",
+            KASMVNC_USERNAME,
+            "-w",
+        ]
+        assert password_call.kwargs["input"] == (
+            f"{KASMVNC_PROXY_PASSWORD}\n{KASMVNC_PROXY_PASSWORD}\n"
+        )
+
+        launch = launch_call.args[0]
+        assert launch[0] == "vncserver"
+        assert launch[launch.index("-websocketPort") + 1] == "8002"
+        assert launch[launch.index("-sslOnly") + 1] == "0"
+        assert launch[launch.index("-interface") + 1] == "0.0.0.0"
+        assert launch[launch.index("-select-de") + 1] == "manual"
+        assert "novnc_proxy" not in " ".join(launch)
+        create_process.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_start_configures_plain_http_behind_the_app_server_proxy(self):
+        service = DesktopService()
+
+        def exists(path):
+            return not str(path).endswith("kasmvnc.yaml")
+
+        with (
+            patch.object(service, "is_running", side_effect=[False, True]),
+            patch("pathlib.Path.mkdir"),
+            patch("pathlib.Path.exists", exists),
+            patch("pathlib.Path.write_text", autospec=True) as write_text,
+            patch("subprocess.run", side_effect=[completed(), completed()]),
+            patch("asyncio.sleep"),
+        ):
+            assert await service.start() is True
+
+        written = "\n".join(str(call.args) for call in write_text.call_args_list)
+        assert "kasmvnc.yaml" in written
+        assert "protocol: http" in written
+        assert "require_ssl: false" in written
+        assert "websocket_port: 8002" in written
+        assert "width: 1280" in written
+        assert "height: 800" in written
+
+    @pytest.mark.asyncio
+    async def test_start_offloads_blocking_process_calls(self):
+        service = DesktopService()
+        real_to_thread = asyncio.to_thread
+        with (
+            patch.object(service, "is_running", side_effect=[False, True]),
+            patch("pathlib.Path.mkdir"),
+            patch("pathlib.Path.exists", return_value=True),
+            patch("subprocess.run", side_effect=[completed(), completed()]) as run_mock,
             patch("asyncio.sleep"),
             patch("asyncio.to_thread", wraps=real_to_thread) as to_thread_spy,
         ):
-            result = await service.start()
-            offloaded = [c.args[0] for c in to_thread_spy.call_args_list if c.args]
+            assert await service.start() is True
 
-        assert result is True
-        assert run_mock in offloaded, (
-            "blocking subprocess.run must be offloaded via asyncio.to_thread, "
-            "not executed directly on the event loop"
-        )
+        offloaded = [call.args[0] for call in to_thread_spy.call_args_list]
+        assert run_mock in offloaded
 
     @pytest.mark.asyncio
-    async def test_stop_desktop_no_process(self):
-        """Test stopping desktop when no process is running."""
+    async def test_stop_is_a_noop_when_kasmvnc_is_not_running(self):
         service = DesktopService()
-        service._proc = None
-
-        await service.stop()  # Should not raise any exception
+        with (
+            patch.object(service, "is_running", return_value=False),
+            patch("subprocess.run") as run_mock,
+        ):
+            await service.stop()
+        run_mock.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_stop_desktop_graceful(self):
-        """Test stopping desktop gracefully."""
+    async def test_stop_kills_the_kasmvnc_display(self):
         service = DesktopService()
-        mock_proc = AsyncMock()
-        mock_proc.returncode = None
-        service._proc = mock_proc
-
-        await service.stop()
-
-        mock_proc.terminate.assert_called_once()
-        mock_proc.wait.assert_called_once()
-        assert service._proc is None
+        with (
+            patch.object(service, "is_running", return_value=True),
+            patch("subprocess.run", return_value=completed()) as run_mock,
+        ):
+            await service.stop()
+        assert run_mock.call_args.args[0] == ["vncserver", "-kill", ":1"]
 
     @pytest.mark.asyncio
-    async def test_stop_desktop_timeout(self):
-        """Test stopping desktop with timeout."""
+    async def test_stop_tolerates_a_process_error(self):
         service = DesktopService()
-        mock_proc = MagicMock()
-        mock_proc.returncode = None
+        with (
+            patch.object(service, "is_running", return_value=True),
+            patch("subprocess.run", side_effect=OSError("failed")),
+        ):
+            await service.stop()
 
-        mock_proc.terminate = MagicMock()
-        mock_proc.kill = MagicMock()
-
-        # Mock wait to raise TimeoutError on first call, then succeed on second call
-        wait_calls = 0
-
-        async def mock_wait():
-            nonlocal wait_calls
-            wait_calls += 1
-            if wait_calls == 1:
-                raise TimeoutError()
-            return None
-
-        mock_proc.wait = mock_wait
-        service._proc = mock_proc
-
-        await service.stop()
-
-        mock_proc.terminate.assert_called_once()
-        mock_proc.kill.assert_called_once()
-        assert service._proc is None
-
-    @pytest.mark.asyncio
-    async def test_stop_desktop_exception(self):
-        """Test stopping desktop with exception."""
+    @pytest.mark.parametrize(("returncode", "expected"), [(0, True), (1, False)])
+    def test_running_check_targets_kasmvnc(self, returncode: int, expected: bool):
         service = DesktopService()
-        mock_proc = AsyncMock()
-        mock_proc.returncode = None
-        mock_proc.terminate.side_effect = Exception("Terminate failed")
-        service._proc = mock_proc
+        with patch("subprocess.run", return_value=completed(returncode)) as run_mock:
+            assert service.is_running() is expected
+        assert run_mock.call_args.args[0] == ["pgrep", "-x", "Xvnc"]
 
-        await service.stop()
-
-        assert service._proc is None
-
-    def test_is_running_with_process(self):
-        """Test is_running when process is active."""
+    def test_running_check_tolerates_a_process_error(self):
         service = DesktopService()
-        mock_proc = MagicMock()
-        mock_proc.returncode = None
-        service._proc = mock_proc
-
-        assert service.is_running() is True
-
-    def test_is_running_with_dead_process(self):
-        """Test is_running when process is dead."""
-        service = DesktopService()
-        mock_proc = MagicMock()
-        mock_proc.returncode = 1
-        service._proc = mock_proc
-
-        mock_result = MagicMock()
-        mock_result.returncode = 0
-
-        with patch("subprocess.run", return_value=mock_result):
-            assert service.is_running() is True
-
-    def test_is_running_no_process_vnc_running(self):
-        """Test is_running when no managed process but VNC is running."""
-        service = DesktopService()
-        service._proc = None
-
-        mock_result = MagicMock()
-        mock_result.returncode = 0
-
-        with patch("subprocess.run", return_value=mock_result):
-            assert service.is_running() is True
-
-    def test_is_running_no_process_vnc_not_running(self):
-        """Test is_running when no process and VNC not running."""
-        service = DesktopService()
-        service._proc = None
-
-        mock_result = MagicMock()
-        mock_result.returncode = 1
-
-        with patch("subprocess.run", return_value=mock_result):
+        with patch("subprocess.run", side_effect=OSError("failed")):
             assert service.is_running() is False
 
-    def test_is_running_subprocess_exception(self):
-        """Test is_running when subprocess raises exception."""
+    def test_viewer_url_autoconnects_to_the_kasmvnc_proxy(self):
         service = DesktopService()
-        service._proc = None
-
-        with patch("subprocess.run", side_effect=Exception("Command failed")):
-            assert service.is_running() is False
-
-    def test_get_vnc_url_running(self):
-        """Test get_vnc_url when desktop is running."""
-        service = DesktopService()
-
         with patch.object(service, "is_running", return_value=True):
-            url = service.get_vnc_url("http://example.com:8000")
-            assert url == "http://example.com:8000/vnc.html?autoconnect=1&resize=remote"
+            url = service.get_vnc_url("https://pilot.test/desktop")
 
-    def test_get_vnc_url_not_running(self):
-        """Test get_vnc_url when desktop is not running."""
+        parsed = urlsplit(url or "")
+        query = parse_qs(parsed.query)
+        assert parsed.path == "/desktop/vnc.html"
+        assert query == {
+            "autoconnect": ["1"],
+            "resize": ["scale"],
+            "reconnect": ["true"],
+            "username": [KASMVNC_USERNAME],
+            "password": [KASMVNC_PROXY_PASSWORD],
+        }
+
+    def test_viewer_url_is_absent_when_desktop_is_not_running(self):
         service = DesktopService()
-
         with patch.object(service, "is_running", return_value=False):
-            url = service.get_vnc_url("http://example.com:8000")
-            assert url is None
+            assert service.get_vnc_url("https://pilot.test/desktop") is None
 
-    def test_get_vnc_url_default_base(self):
-        """Test get_vnc_url with default base URL."""
+    def test_viewer_url_default_base_uses_the_desktop_port(self):
         service = DesktopService()
-
         with patch.object(service, "is_running", return_value=True):
             url = service.get_vnc_url()
-            assert url == "http://localhost:8003/vnc.html?autoconnect=1&resize=remote"
+        assert url is not None
+        assert url.startswith("http://localhost:8002/")
 
 
 class TestGetDesktopService:
-    """Test cases for get_desktop_service function."""
-
     def setup_method(self):
-        """Reset global state before each test."""
         import openhands.agent_server.desktop_service
 
         openhands.agent_server.desktop_service._desktop_service = None
 
-    def test_get_desktop_service_vnc_enabled(self):
-        """Test getting desktop service when VNC is enabled."""
-        mock_config = MagicMock()
-        mock_config.enable_vnc = True
-
+    def test_returns_service_when_enabled(self):
+        config = MagicMock(enable_vnc=True)
         with patch(
             "openhands.agent_server.desktop_service.get_default_config",
-            return_value=mock_config,
+            return_value=config,
         ):
-            service = get_desktop_service()
-            assert service is not None
-            assert isinstance(service, DesktopService)
+            assert isinstance(get_desktop_service(), DesktopService)
 
-    def test_get_desktop_service_vnc_disabled(self):
-        """Test getting desktop service when VNC is disabled."""
-        mock_config = MagicMock()
-        mock_config.enable_vnc = False
-
+    def test_returns_none_when_disabled(self):
+        config = MagicMock(enable_vnc=False)
         with patch(
             "openhands.agent_server.desktop_service.get_default_config",
-            return_value=mock_config,
+            return_value=config,
         ):
-            service = get_desktop_service()
-            assert service is None
+            assert get_desktop_service() is None
 
-    def test_get_desktop_service_singleton(self):
-        """Test that get_desktop_service returns the same instance."""
-        mock_config = MagicMock()
-        mock_config.enable_vnc = True
-
+    def test_returns_process_singleton(self):
+        config = MagicMock(enable_vnc=True)
         with patch(
             "openhands.agent_server.desktop_service.get_default_config",
-            return_value=mock_config,
+            return_value=config,
         ):
-            service1 = get_desktop_service()
-            service2 = get_desktop_service()
-            assert service1 is service2
-
-    def test_get_desktop_service_reset_global(self):
-        """Test resetting the global desktop service."""
-        mock_config = MagicMock()
-        mock_config.enable_vnc = True
-
-        with patch(
-            "openhands.agent_server.desktop_service.get_default_config",
-            return_value=mock_config,
-        ):
-            service = get_desktop_service()
-            assert service is not None
+            assert get_desktop_service() is get_desktop_service()

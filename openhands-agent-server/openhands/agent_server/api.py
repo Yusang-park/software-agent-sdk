@@ -227,10 +227,9 @@ async def api_lifespan(api: FastAPI) -> AsyncIterator[None]:
             logger.info("Served app discovery started")
 
         # The desktop is the slowest of these and the only one nothing waits
-        # on: TigerVNC plus the noVNC proxy took 5.1s of a 17.36s sandbox
-        # readiness, and until the gather returned the server answered no
-        # request at all -- including /alive. No request path needs it, so let
-        # it come up on its own while the server starts serving.
+        # on. KasmVNC starts its X server and integrated web endpoint in the
+        # background; no request path needs it, so let the Agent Server begin
+        # serving while the desktop comes up.
         desktop_task = asyncio.create_task(start_desktop_service())
         _BACKGROUND_STARTUP_TASKS.add(desktop_task)
         desktop_task.add_done_callback(_BACKGROUND_STARTUP_TASKS.discard)
@@ -263,7 +262,7 @@ async def api_lifespan(api: FastAPI) -> AsyncIterator[None]:
 
             async def stop_desktop_service():
                 # The start runs detached, so a shutdown can land while it is
-                # still bringing TigerVNC up. Let it finish first, otherwise
+                # still bringing KasmVNC up. Let it finish first, otherwise
                 # stop() tears down a half-built desktop and leaves the
                 # processes it had not yet recorded.
                 if not desktop_task.done():

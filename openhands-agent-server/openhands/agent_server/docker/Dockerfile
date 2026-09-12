@@ -300,10 +300,63 @@ ENV LOG_JSON=true
 EXPOSE ${PORT}
 
 ####################################################################################
-# Base image (full)
-# It includes additional Docker, VNC, Desktop, and VSCode Web.
+# Desktop image
+#
+# KasmVNC replaces the TigerVNC + noVNC + websockify stack. Its X server owns
+# the browser client and WebSocket endpoint on one port, so the runtime has one
+# fewer relay process and can use KasmVNC's adaptive JPEG/WebP encoder. The
+# App Server remains the authorization boundary and TLS terminator.
 ####################################################################################
-FROM base-image-minimal AS base-image
+FROM base-image-minimal AS base-image-desktop
+ARG USERNAME
+ARG KASMVNC_VERSION=1.5.0
+ARG KASMVNC_AMD64_SHA256=80b241de7dfe53bba2b7e1cc5ac8c5246d72271efa16be2d4f76607f30fab1c4
+ARG KASMVNC_ARM64_SHA256=fbb11589958a2acccd2d67f67944be79ac1e8e3a1d6172c0e6db6dc59e55a919
+
+USER root
+RUN set -eux; \
+    kasm_arch="$(dpkg --print-architecture)"; \
+    case "$kasm_arch" in \
+      amd64) kasm_sha256="$KASMVNC_AMD64_SHA256" ;; \
+      arm64) kasm_sha256="$KASMVNC_ARM64_SHA256" ;; \
+      *) echo "Unsupported KasmVNC architecture: $kasm_arch" >&2; exit 1 ;; \
+    esac; \
+    kasm_package="kasmvncserver_trixie_${KASMVNC_VERSION}_${kasm_arch}.deb"; \
+    curl -fsSL \
+      "https://github.com/kasmtech/KasmVNC/releases/download/v${KASMVNC_VERSION}/${kasm_package}" \
+      -o "/tmp/${kasm_package}"; \
+    echo "${kasm_sha256}  /tmp/${kasm_package}" | sha256sum -c -; \
+    apt-get update; \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+      "/tmp/${kasm_package}" xfce4 dbus-x11; \
+    make-ssl-cert generate-default-snakeoil --force-overwrite; \
+    usermod -aG ssl-cert "$USERNAME"; \
+    rm -f "/tmp/${kasm_package}"; \
+    apt-get clean; \
+    rm -rf /var/lib/apt/lists/*
+
+ENV NOVNC_PORT=8002 \
+    DISPLAY=:1 \
+    VNC_GEOMETRY=1280x800 \
+    OH_ENABLE_VNC=true
+
+# The browser tool uses the Playwright-managed Chromium copied into the final
+# image. Disable password-manager UI there without installing a second distro
+# Chromium solely to carry its policy directory.
+RUN set -eux; \
+    mkdir -p /etc/chromium/policies/managed; \
+    printf '%s\n' '{"PasswordManagerEnabled":false}' \
+      > /etc/chromium/policies/managed/pilot.json
+
+USER ${USERNAME}
+WORKDIR /
+EXPOSE ${PORT} ${NOVNC_PORT}
+
+####################################################################################
+# Base image (full)
+# It includes additional Docker and VSCode Web on top of the KasmVNC desktop.
+####################################################################################
+FROM base-image-desktop AS base-image
 ARG USERNAME
 
 USER root
@@ -383,38 +436,11 @@ RUN set -eux; \
     apt-get clean; \
     rm -rf /var/lib/apt/lists/*
 
-# --- VNC + Desktop + noVNC ---
-RUN set -eux; \
-  apt-get update; \
-  apt-get install -y --no-install-recommends \
-    # GUI bits (remove entirely if headless)
-    tigervnc-standalone-server xfce4 dbus-x11 novnc websockify ffmpeg \
-    # Local service dependencies commonly required by repository runtimes
-    redis-server \
-    # Browser
-    $(if grep -q "ubuntu" /etc/os-release; then echo "chromium-browser"; else echo "chromium"; fi); \
-  apt-get clean; rm -rf /var/lib/apt/lists/*
-
-ENV NOVNC_WEB=/usr/share/novnc \
-    NOVNC_PORT=8002 \
-    DISPLAY=:1 \
-    VNC_GEOMETRY=1280x800 \
-    CHROME_BIN=/usr/bin/chromium \
-    PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium \
-    CHROMIUM_FLAGS="--no-sandbox --disable-dev-shm-usage --disable-gpu"
-
-RUN set -eux; \
-    mkdir -p /etc/chromium/policies/managed; \
-    printf '%s\n' '{"PasswordManagerEnabled":false}' \
-        > /etc/chromium/policies/managed/pilot.json
-
-RUN chown -R ${USERNAME}:${USERNAME} ${NOVNC_WEB}
 # Override default XFCE wallpaper
 COPY --chown=${USERNAME}:${USERNAME} openhands-agent-server/openhands/agent_server/docker/wallpaper.svg /usr/share/backgrounds/xfce/xfce-shapes.svg
 
 USER ${USERNAME}
 WORKDIR /
-ENV OH_ENABLE_VNC=false
 ENV LOG_JSON=true
 EXPOSE ${PORT} ${NOVNC_PORT}
 
@@ -446,14 +472,11 @@ ENTRYPOINT ["tini", "--", "/agent-server/.venv/bin/python", "-m", "openhands.age
 # Production mode: build the binary inside Docker and copy it in.
 # NOTE: no support for external artifact contexts anymore.
 ############################
-# base-image-minimal, not base-image. The full base adds openvscode-server, a
-# Docker engine, an XFCE desktop with VNC and noVNC, ffmpeg, the gh CLI and a
-# second chromium -- roughly 1.4 GB of a 1.8 GB image, carried by every sandbox
-# and used by none of them. Measured against Chartmetric Pilot's production on
-# 2026-09-02: the VS Code proxy served 0 sandboxes in seven days, the desktop
-# proxy 0, and of twelve configured repository runtimes none required docker or
-# chromium (one required redis, which is why redis moved into the minimal
-# stage above).
+# base-image-desktop, not the editor/Docker `base-image`. KasmVNC is now the
+# Agent Browser and computing surface, while OpenVSCode Server and Docker remain
+# optional. The old full base added those plus TigerVNC/noVNC and a second
+# Chromium -- roughly 1.4 GB of a 1.8 GB image. The desktop stage above carries
+# only KasmVNC, XFCE and their runtime dependencies.
 #
 # This is the *default* target rather than a second one because the tag
 # contract depends on it: `build.py` appends the target name to every tag for
@@ -467,7 +490,7 @@ ENTRYPOINT ["tini", "--", "/agent-server/.venv/bin/python", "-m", "openhands.age
 # because a copied binary without them is the failure production measured on
 # 2026-09-02. Anything that genuinely wants the editor or a Docker engine can
 # build `binary-full`.
-FROM base-image-minimal AS binary
+FROM base-image-desktop AS binary
 ARG USERNAME
 
 COPY --chown=${USERNAME}:${USERNAME} --from=binary-builder /agent-server/dist/openhands-agent-server /usr/local/bin/openhands-agent-server
