@@ -48,6 +48,35 @@ def test_browser_image_disables_password_manager_prompts():
     assert "> /etc/chromium/policies/managed/pilot.json" in dockerfile
 
 
+def test_default_browser_image_replaces_tigervnc_novnc_with_kasmvnc():
+    repo_root = Path(__file__).resolve().parents[2]
+    dockerfile = (
+        repo_root
+        / "openhands-agent-server"
+        / "openhands"
+        / "agent_server"
+        / "docker"
+        / "Dockerfile"
+    ).read_text(encoding="utf-8")
+
+    assert "ARG KASMVNC_VERSION=1.5.0" in dockerfile
+    assert "kasmvncserver_trixie_${KASMVNC_VERSION}_${kasm_arch}.deb" in dockerfile
+    assert "FROM base-image-desktop AS binary" in dockerfile
+    assert "make-ssl-cert generate-default-snakeoil --force-overwrite" in dockerfile
+    assert 'usermod -aG ssl-cert "$USERNAME"' in dockerfile
+    assert "tigervnc-standalone-server" not in dockerfile
+    assert " novnc websockify" not in dockerfile
+    desktop_stage = dockerfile.split("FROM base-image-desktop AS base-image", 1)[0]
+    assert " xfce4 dbus-x11 ffmpeg" not in desktop_stage
+    assert dockerfile.count("ENV OH_ENABLE_VNC=false") == 1
+
+
+def test_kasmvnc_desktop_base_is_a_supported_build_target():
+    from openhands.agent_server.docker.build import VALID_TARGETS
+
+    assert "base-image-desktop" in VALID_TARGETS
+
+
 def _create_fake_sdist(tmp_path: Path) -> Path:
     src_root = tmp_path / "openhands-sdk-test"
     src_root.mkdir()

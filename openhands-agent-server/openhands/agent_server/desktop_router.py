@@ -29,13 +29,13 @@ class DesktopNavigateRequest(BaseModel):
 async def get_desktop_url(
     base_url: str = "http://localhost:8002",
 ) -> DesktopUrlResponse:
-    """Get the noVNC URL for desktop access.
+    """Get the KasmVNC URL for desktop access.
 
     Args:
-        base_url: Base URL for the noVNC server (default: http://localhost:8002)
+        base_url: Base URL for the KasmVNC server (default: http://localhost:8002)
 
     Returns:
-        noVNC URL if available, None otherwise
+        KasmVNC URL if available, None otherwise
     """
     desktop_service = get_desktop_service()
     if desktop_service is None:
